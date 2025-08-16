@@ -245,6 +245,21 @@ def fmt_currency(v, currency="SAR") -> str:
     except (ValueError, TypeError):
         return str(v)
 
+def get_simple_freshness_text(last_update: Optional[datetime]) -> str:
+    """Return simple text for data freshness (no HTML)"""
+    if not last_update:
+        return "No update info"
+    
+    now = datetime.now()
+    hours_old = (now - last_update).total_seconds() / 3600
+    
+    if hours_old < 1:
+        return f"Updated {int(hours_old * 60)} min ago"
+    elif hours_old < 24:
+        return f"Updated {int(hours_old)} hours ago"
+    else:
+        return f"Updated {int(hours_old / 24)} days ago"
+
 def get_data_freshness_indicator(last_update: Optional[datetime]) -> str:
     """Return HTML for data freshness indicator"""
     if not last_update:
@@ -656,7 +671,7 @@ def main():
         enhanced_kpi_card(
             "Total Balance", 
             total_balance, 
-            subtitle=get_data_freshness_indicator(bal_date),
+            subtitle=f"Updated {bal_date.strftime('%H:%M') if bal_date else 'Unknown'}" if bal_date else "No update info",
             bg="#E6F0FF", 
             border="#C7D8FE", 
             text="#1E3A8A"
@@ -841,20 +856,43 @@ def main():
             viz["Amount"] = viz["amount"].map(fmt_currency)
             viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
 
+            # Rename columns for display, but only if they exist
+            rename_dict = {
+                "reference": "Reference",
+                "bank": "Bank", 
+                "type": "Type",
+                "status": "Status",
+                "remark": "Remark",
+                "description": "Description"
+            }
+            
+            # Only rename columns that actually exist
+            existing_renames = {k: v for k, v in rename_dict.items() if k in viz.columns}
+            viz = viz.rename(columns=existing_renames)
+
             # Color coding for urgency
             def highlight_urgent(row):
-                if row["Days Until Due"] <= 2:
+                if "Days Until Due" in row and row["Days Until Due"] <= 2:
                     return ['background-color: #fee2e2'] * len(row)
-                elif row["Days Until Due"] <= 7:
+                elif "Days Until Due" in row and row["Days Until Due"] <= 7:
                     return ['background-color: #fef3c7'] * len(row)
                 else:
                     return [''] * len(row)
 
-            display_cols = [c for c in ["reference", "bank", "type", "Settlement Date", 
-                           "Amount", "Days Until Due", "remark"] 
-                           if c in viz.columns or c in ["Settlement Date", "Amount", "Days Until Due"]]
+            # Build display columns list more carefully
+            potential_cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", 
+                            "Amount", "Days Until Due", "Remark", "Description"]
+            display_cols = [c for c in potential_cols if c in viz.columns]
             
-            df_show = viz[display_cols].sort_values("settlement_date" if "settlement_date" in viz.columns else "Settlement Date")
+            df_show = viz[display_cols]
+            
+            # Safe sorting - only sort if the column exists
+            if "Settlement Date" in df_show.columns:
+                df_show = df_show.sort_values("Settlement Date")
+            elif "settlement_date" in viz.columns:
+                # If we still have the original column, sort by that and then select display columns
+                viz_sorted = viz.sort_values("settlement_date")
+                df_show = viz_sorted[display_cols]
             
             st.dataframe(
                 df_show.style.apply(highlight_urgent, axis=1),
