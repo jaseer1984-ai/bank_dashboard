@@ -652,30 +652,59 @@ def main():
         df_fm = pd.DataFrame()
         data_status['fund_movement'] = 'error'
     
-    # Calculate KPIs with safe defaults
-    total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
-    banks_cnt = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
+    # Calculate KPIs with safe defaults and error handling
+    try:
+        total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
+    except Exception:
+        total_balance = 0.0
+        
+    try:
+        banks_cnt = int(df_by_bank["bank"].nunique()) if not df_by_bank.empty else 0
+    except Exception:
+        banks_cnt = 0
     
-    today0 = pd.Timestamp.now(tz=config.TZ).normalize().tz_localize(None)
-    next4 = today0 + pd.Timedelta(days=3)
+    try:
+        today0 = pd.Timestamp.now(tz=config.TZ).normalize().tz_localize(None)
+        next4 = today0 + pd.Timedelta(days=3)
+        
+        lc_next4_sum = float(
+            df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
+            if not df_lc.empty else 0.0
+        )
+    except Exception:
+        lc_next4_sum = 0.0
+        
+    try:
+        approved_sum = float(df_pay["amount"].sum()) if not df_pay.empty else 0.0
+    except Exception:
+        approved_sum = 0.0
     
-    lc_next4_sum = (
-        df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
-        if not df_lc.empty else 0.0
-    )
-    approved_sum = df_pay["amount"].sum() if not df_pay.empty else 0.0
-    
-    # Display KPIs with simple cards
+    # Display KPIs with simple cards - using try/catch for each
     k1, k2, k3, k4 = st.columns(4)
     
     with k1:
-        kpi_card("Total Balance", total_balance, "#E6F0FF", "#C7D8FE", "#1E3A8A")
+        try:
+            simple_kpi_card("Total Balance", total_balance, "#E6F0FF", "#C7D8FE", "#1E3A8A")
+        except Exception as e:
+            st.error(f"KPI 1 Error: {e}")
+            
     with k2:
-        kpi_card("Approved Payments", approved_sum, "#E9FFF2", "#C7F7DD", "#065F46")
+        try:
+            simple_kpi_card("Approved Payments", approved_sum, "#E9FFF2", "#C7F7DD", "#065F46")
+        except Exception as e:
+            st.error(f"KPI 2 Error: {e}")
+            
     with k3:
-        kpi_card("LC due (next 4 days)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
+        try:
+            simple_kpi_card("LC due (next 4 days)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
+        except Exception as e:
+            st.error(f"KPI 3 Error: {e}")
+            
     with k4:
-        kpi_card("Active Banks", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
+        try:
+            simple_kpi_card("Active Banks", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
+        except Exception as e:
+            st.error(f"KPI 4 Error: {e}")
     
     # Add data freshness info below KPIs
     if bal_date:
