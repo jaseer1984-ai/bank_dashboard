@@ -754,99 +754,51 @@ def main():
             cols = st.columns(4)
             for i, row in df_bal_view.iterrows():
                 with cols[int(i) % 4]:
-                    # Determine card color based on balance amount for visual hierarchy - LIGHTER SHADES
+                    # Determine card color based on balance amount - SIMPLE VERSION
                     balance = row['balance']
                     if balance > 500000:
-                        card_bg = "linear-gradient(135deg, #a5b4fc 0%, #c4b5fd 100%)"
-                        text_color = "#1e293b"
-                        border_color = "#a5b4fc"
+                        bg_color = "#a5b4fc"
                         icon = "💎"
                     elif balance > 100000:
-                        card_bg = "linear-gradient(135deg, #fbb6ce 0%, #f9a8d4 100%)"
-                        text_color = "#1e293b"
-                        border_color = "#fbb6ce"
+                        bg_color = "#fbb6ce"
                         icon = "🔹"
                     elif balance > 50000:
-                        card_bg = "linear-gradient(135deg, #7dd3fc 0%, #a5f3fc 100%)"
-                        text_color = "#1e293b"
-                        border_color = "#7dd3fc"
+                        bg_color = "#7dd3fc"
                         icon = "💠"
                     else:
-                        card_bg = "linear-gradient(135deg, #86efac 0%, #a7f3d0 100%)"
-                        text_color = "#1e293b"
-                        border_color = "#86efac"
+                        bg_color = "#86efac"
                         icon = "💚"
                     
-                    st.markdown(
-                        f"""
-                        <div style="
-                            background: {card_bg};
-                            padding: 24px 20px;
-                            border-radius: 16px;
-                            box-shadow: 0px 8px 25px rgba(0,0,0,0.1);
-                            margin-bottom: 20px;
-                            border: 2px solid {border_color};
-                            transition: all 0.3s ease;
-                            position: relative;
-                            overflow: hidden;
-                        " onmouseover="this.style.transform='translateY(-5px) scale(1.02)'" 
-                           onmouseout="this.style.transform='translateY(0) scale(1)'">
-                            
-                            <!-- Decorative background pattern -->
+                    # Use Streamlit's built-in container instead of raw HTML
+                    with st.container():
+                        st.markdown(
+                            f"""
                             <div style="
-                                position: absolute;
-                                top: -20px;
-                                right: -20px;
-                                width: 80px;
-                                height: 80px;
-                                background: rgba(255,255,255,0.3);
-                                border-radius: 50%;
-                                opacity: 0.4;
-                            "></div>
-                            
-                            <!-- Bank icon and name -->
-                            <div style="
-                                display: flex;
-                                align-items: center;
+                                background-color: {bg_color};
+                                padding: 20px;
+                                border-radius: 12px;
                                 margin-bottom: 16px;
+                                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
                             ">
-                                <span style="font-size: 20px; margin-right: 8px;">{icon}</span>
+                                <div style="display: flex; align-items: center; margin-bottom: 12px;">
+                                    <span style="font-size: 18px; margin-right: 8px;">{icon}</span>
+                                    <span style="font-size: 13px; font-weight: 600; color: #1e293b;">{row['bank']}</span>
+                                </div>
                                 <div style="
-                                    font-size: 14px;
-                                    color: {text_color};
-                                    font-weight: 600;
-                                    text-transform: uppercase;
-                                    letter-spacing: 0.5px;
-                                    opacity: 0.8;
-                                ">{row['bank']}</div>
+                                    font-size: 24px; 
+                                    font-weight: 800; 
+                                    color: #1e293b; 
+                                    text-align: right;
+                                ">
+                                    {fmt_currency(row['balance'])}
+                                </div>
+                                <div style="font-size: 9px; color: #1e293b; opacity: 0.7; margin-top: 8px;">
+                                    Available Balance
+                                </div>
                             </div>
-                            
-                            <!-- Balance amount -->
-                            <div style="
-                                font-size: 26px;
-                                font-weight: 800;
-                                color: {text_color};
-                                text-align: right;
-                                line-height: 1.2;
-                            ">
-                                {fmt_currency(row['balance'])}
-                            </div>
-                            
-                            <!-- Small indicator -->
-                            <div style="
-                                position: absolute;
-                                bottom: 12px;
-                                left: 20px;
-                                font-size: 10px;
-                                color: {text_color};
-                                opacity: 0.6;
-                                text-transform: uppercase;
-                                letter-spacing: 1px;
-                            ">Available Balance</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+                            """,
+                            unsafe_allow_html=True
+                        )
         else:
             df_bal_table = df_bal_view[["bank", "balance"]].rename(columns={"bank": "Bank", "balance": "Balance"})
             # Use right-aligned currency formatting
