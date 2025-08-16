@@ -1,11 +1,10 @@
-# app.py — Treasury Dashboard (Google Sheets)
-# - Top bar: logo + company name + Refresh button
-# - Bank Balances: Cards/Table toggle (4-up card grid), right-aligned amounts
-# - Approved Supplier Payments (Approved List)
-# - LC Settlements: Pending-only + Reference No (A/C #)
-# - Liquidity Trend + Quick Insights
+# app.py — Treasury Dashboard (exact amounts on cards, no SAR, no 'Only')
+# - Bank Balances: cards show exact numbers (no K/M, no decimals), SAR removed
+# - "Only" removed from LC header ("Pending" instead of "Pending Only")
+# - Includes: header (logo + refresh), KPIs, cards/table toggle, supplier (Approved), LC Pending (+ optional reference), liquidity trend, insights, footer
 
 import io
+import time
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -18,7 +17,7 @@ import streamlit as st
 st.set_page_config(page_title="Treasury Dashboard", layout="wide", initial_sidebar_state="collapsed")
 
 # ----------------------------
-# YOUR GOOGLE SHEET (same file id, different gids per tab)
+# Google Sheets links (same file id, different gids per sheet)
 # ----------------------------
 FILE_ID = "1371amvaCbejUWVJI_moWdIchy5DF1lPO"
 LINKS = {
@@ -29,7 +28,7 @@ LINKS = {
 }
 
 COMPANY_NAME = "Issam Kabbani & Partners – Unitech"
-LOGO_PATH = "ikk_logo.png"            # optional small square PNG near app.py
+LOGO_PATH = "ikk_logo.png"       # put a 44px-ish square logo (PNG) next to app.py
 DATE_FMT = "%Y-%m-%d"
 TZ = "Asia/Riyadh"
 
@@ -58,24 +57,15 @@ def cols_lower(df: pd.DataFrame) -> pd.DataFrame:
     out.columns = [str(c).strip().lower() for c in df.columns]
     return out
 
-def fmt_num(v):
+def fmt_full_int(v):
+    """Exact integer string with thousands separators, no decimals, no rounding suffixes."""
     try:
-        return f"{float(v):,.2f}"
+        return f"{float(v):,.0f}"
     except Exception:
         return str(v)
 
-def k_format(n: float) -> str:
-    try:
-        n = float(n)
-    except Exception:
-        return str(n)
-    if n >= 1_000_000:
-        return f"{n/1_000_000:.2f}M"
-    if n >= 1_000:
-        return f"{n/1_000:.2f}K"
-    return f"{n:,.0f}"
-
 def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
+    # KPI value right-aligned; keep existing behavior
     st.markdown(
         f"""
         <div style="
@@ -84,7 +74,7 @@ def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
             box-shadow:0 1px 6px rgba(0,0,0,.04);">
             <div style="font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em">{title}</div>
             <div style="font-size:28px;font-weight:800;color:{text};margin-top:4px;text-align:right;">
-                {fmt_num(value) if isinstance(value,(int,float,np.integer,np.floating)) else value}
+                {fmt_full_int(value) if isinstance(value,(int,float,np.integer,np.floating)) else value}
             </div>
         </div>
         """,
@@ -95,9 +85,13 @@ def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
 # Parsers
 # ----------------------------
 def parse_bank_balance(df: pd.DataFrame):
+    """
+    A) If columns 'Bank' and ('Amount' or 'Amount(SAR)') exist -> sum by bank.
+    B) Otherwise, bank name column + date headers -> pick latest date column.
+    """
     c = cols_lower(df)
 
-    # direct bank + amount table
+    # Case A
     if "bank" in c.columns and ("amount" in c.columns or "amount(sar)" in c.columns):
         amt_col = "amount" if "amount" in c.columns else "amount(sar)"
         out = pd.DataFrame({
@@ -108,8 +102,9 @@ def parse_bank_balance(df: pd.DataFrame):
         by_bank = out.groupby("bank", as_index=False)["balance"].sum()
         return by_bank, latest_date
 
-    # detect bank column + last date column
+    # Case B
     raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
+
     bank_col = None
     for col in raw.columns:
         if raw[col].dtype == object and (raw[col].dropna().astype(str).str.strip() != "").sum() >= 3:
@@ -141,7 +136,6 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         "amount(sar)": "amount_sar",
         "order/sh/branch": "order_branch"
     })
-
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
 
@@ -167,9 +161,10 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     d = cols_lower(df)
 
+    # Possible reference column (e.g., "A/C #", "ref", "account")
+    ref_col = next((c for c in d.columns if "a/c" in c or "ref" in c or "account" in c), None)
+
     bank = next((c for c in d.columns if c.startswith("bank")), None)
-    # include the reference / account column (A/C # etc.)
-    ref_col = next((c for c in d.columns if "a/c" in c or "ac" in c or "a/c #" in c or "a/c#" in c or "ac #" in c), None)
 
     date_col = None
     for cand in d.columns:
@@ -203,8 +198,8 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = pd.DataFrame({
+        "reference": d[ref_col].astype(str).str.strip() if ref_col else "",
         "bank": d[bank].astype(str).str.strip(),
-        "ref": d[ref_col].astype(str).str.strip() if ref_col else "",
         "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
         "amount": d[amount_col].map(_to_number),
         "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
@@ -212,7 +207,7 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
         "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
         "description": ""
     })
-    out = out.dropna(subset=["bank","amount","settlement_date"])
+    out = out.dropna(subset=["bank", "amount", "settlement_date"])
     out = out[out["status"].str.lower() == "pending"].copy()
     return out
 
@@ -231,15 +226,15 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------
 # Header: logo + title + top-right Refresh
 # ----------------------------
-c_logo, c_title, c_refresh = st.columns([0.07, 0.73, 0.20])
+c_logo, c_title, c_refresh = st.columns([0.08, 0.74, 0.18])
 with c_logo:
     try:
-        st.image(LOGO_PATH, width=46)
+        st.image(LOGO_PATH, width=44)
     except Exception:
-        st.write("")
+        st.write("")  # no logo available
 with c_title:
     st.markdown(
-        f"<h2 style='margin:0;padding-top:6px;'>{COMPANY_NAME} — Treasury Dashboard</h2>",
+        f"<h2 style='margin:0;padding-top:6px;display:flex;align-items:center;'>{COMPANY_NAME} — Treasury Dashboard</h2>",
         unsafe_allow_html=True
     )
 with c_refresh:
@@ -251,7 +246,7 @@ with c_refresh:
 st.markdown("")
 
 # ----------------------------
-# Load source sheets
+# Load Data
 # ----------------------------
 notes = []
 try:
@@ -338,101 +333,91 @@ with k4:
 st.markdown("---")
 
 # ----------------------------
-# Bank Balances — Cards/Table toggle (radio fallback)
+# Bank Balances — Cards/Table toggle
 # ----------------------------
-st.subheader("Bank Balances")
+st.header("Bank Balances")
 
-# Sort (desc) so most significant appear first
-df_bal_sorted = df_by_bank.copy().sort_values("balance", ascending=False).reset_index(drop=True)
-
-# Use radio instead of segmented_control for compatibility
-view = st.radio("Balances view", ["Cards", "Table"], index=0, horizontal=True, key="bal_view")
-
-def bank_card(bank, balance):
-    st.markdown(
-        f"""
-        <div style="
-           background:#fff; border:1px solid #e5e7eb; border-radius:16px;
-           padding:14px 16px; box-shadow:0 2px 6px rgba(0,0,0,.05); min-height:92px;">
-           <div style="font-size:13px; color:#64748b; margin-bottom:6px;">{bank}</div>
-           <div style="font-size:26px; font-weight:800; color:#0f172a;">
-             {k_format(balance)} SAR
-           </div>
-        </div>
-        """, unsafe_allow_html=True
-    )
-
-def render_balance_cards(df_cards: pd.DataFrame, cols_per_row: int = 4):
-    rows = (len(df_cards) + cols_per_row - 1) // cols_per_row
-    for r in range(rows):
-        cols = st.columns(cols_per_row)
-        for i, (_, row) in enumerate(df_cards.iloc[r*cols_per_row:(r+1)*cols_per_row].iterrows()):
-            with cols[i]:
-                bank_card(row["bank"], row["balance"])
-
-def render_balance_table(df_tbl: pd.DataFrame):
-    df_show = df_tbl.rename(columns={"bank": "Bank", "balance": "Balance"}).copy()
-    st.dataframe(
-        df_show.style
-            .format({"Balance": "{:,.2f}"})
-            .set_properties(subset=["Balance"], **{"text-align": "right"}),
-        use_container_width=True, height=360,
-        column_config={
-            "Bank": st.column_config.TextColumn("Bank", width="medium"),
-            "Balance": st.column_config.NumberColumn("Balance", width="large"),
-        }
-    )
-
-if df_bal_sorted.empty:
+if df_by_bank.empty:
     st.info("No balances found.")
 else:
+    view = st.radio("",
+                    options=["Cards", "Table"],
+                    index=0,
+                    horizontal=True,
+                    label_visibility="collapsed")
+
+    df_bal_view = df_by_bank.copy().sort_values("balance", ascending=False)
+
     if view == "Cards":
-        render_balance_cards(df_bal_sorted, cols_per_row=4)
+        # 4 columns grid of cards, exact amounts, no SAR, no decimals
+        cols = st.columns(4)
+        for i, row in df_bal_view.iterrows():
+            with cols[int(i) % 4]:
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #fff;
+                        padding: 20px;
+                        border-radius: 12px;
+                        box-shadow: 0px 2px 6px rgba(0,0,0,0.1);
+                        margin-bottom: 16px;
+                    ">
+                        <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">{row['bank']}</div>
+                        <div style="font-size:26px;font-weight:800;color:#111827;">
+                            {fmt_full_int(row['balance'])}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
     else:
-        render_balance_table(df_bal_sorted)
+        df_bal_table = df_bal_view[["bank", "balance"]].rename(columns={"bank": "Bank", "balance": "Balance"})
+        df_bal_table["Balance"] = df_bal_table["Balance"].map(fmt_full_int)
+        st.dataframe(df_bal_table, use_container_width=True, height=360)
 
 st.markdown("---")
 
 # ----------------------------
-# Approved Supplier Payments — Approved List
+# Supplier Payments — Approved ONLY (list)
 # ----------------------------
-st.header("Approved Supplier Payments")
+st.header("Approved List")
 if df_pay.empty:
     st.info("No Approved payments in sheet.")
 else:
     banks = sorted(df_pay["bank"].dropna().unique())
-    pick_banks = st.multiselect("Filter by Bank", banks, default=banks)
-    view_pay = df_pay[df_pay["bank"].isin(pick_banks)].copy()
+    pick_banks = st.multiselect("Filter by Bank", banks, default=banks, label_visibility="collapsed")
 
-    grp = view_pay.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
+    view = df_pay[df_pay["bank"].isin(pick_banks)].copy()
+
+    grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
     st.markdown("**Sum by Bank**")
-    st.dataframe(
-        grp.rename(columns={"bank":"Bank","amount":"Amount"})
-           .style.format({"Amount": "{:,.2f}"})
-           .set_properties(subset=["Amount"], **{"text-align":"right"}),
-        use_container_width=True, height=220
-    )
+    grp2 = grp.rename(columns={"bank": "Bank", "amount": "Amount"}).copy()
+    grp2["Amount"] = grp2["Amount"].map(fmt_full_int)
+    st.dataframe(grp2, use_container_width=True, height=220)
 
-    st.markdown("**Approved List**")
-    show_cols = [c for c in ["bank","supplier","currency","amount","status"] if c in view_pay.columns]
-    v = view_pay[show_cols].rename(columns={"bank":"Bank","supplier":"Supplier","currency":"Curr","amount":"Amount","status":"Status"})
-    st.dataframe(
-        v.style.format({"Amount": "{:,.2f}"}).set_properties(subset=["Amount"], **{"text-align":"right"}),
-        use_container_width=True, height=360
-    )
+    st.markdown("**Approved List (rows)**")
+    show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view.columns]
+    v = view[show_cols].rename(columns={
+        "bank": "Bank", "supplier": "Supplier", "currency": "Curr", "amount": "Amount", "status": "Status"
+    }).copy()
+    v["Amount"] = v["Amount"].map(fmt_full_int)
+    st.dataframe(v, use_container_width=True, height=360)
 
 st.markdown("---")
 
 # ----------------------------
-# LC Settlements — Pending Only (with Reference No)
+# LC Settlements — PENDING (reference column shown when available)
 # ----------------------------
-st.header("LC Settlements — Pending Only")
-
+st.header("LC Settlements — Pending")
 if df_lc.empty:
-    st.info("No LC (Pending) data.")
+    st.info(
+        "No LC (Pending) data. Ensure sheet has Bank, Maturity Date/New Maturity Date, "
+        "and any of: Balance for Settlement / Currently Due / Amount(SAR)."
+    )
 else:
     dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
     d1, d2 = pd.to_datetime(dmin), pd.to_datetime(dmax) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
     lc_view = df_lc.loc[df_lc["settlement_date"].between(d1, d2)].copy()
 
     cc1, cc2 = st.columns(2)
@@ -443,18 +428,37 @@ else:
 
     if not lc_view.empty:
         viz = lc_view.copy()
-        viz["settlement_date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
-        viz = viz.rename(columns={
-            "ref": "Reference No",
-            "bank":"Bank","type":"Type","status":"Status",
-            "settlement_date":"Settlement Date","amount":"Amount",
-            "remark":"Remark","description":"Description"
-        })
-        order = [c for c in ["Reference No","Bank","Type","Status","Settlement Date","Amount","Remark","Description"] if c in viz.columns]
-        st.dataframe(
-            viz[order].style.format({"Amount": "{:,.2f}"}).set_properties(subset=["Amount"], **{"text-align":"right"}),
-            use_container_width=True, height=420
-        )
+        viz["Settlement Date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
+        viz["Amount"] = viz["amount"].map(fmt_full_int)
+
+        # Show reference when available
+        display_cols = []
+        if "reference" in viz.columns and viz["reference"].astype(str).str.strip().any():
+            display_cols = ["reference", "bank", "type", "status", "Settlement Date", "Amount", "remark", "description"]
+            viz = viz.rename(columns={
+                "reference": "Reference", "bank":"Bank","type":"Type","status":"Status",
+                "remark":"Remark","description":"Description"
+            })
+        else:
+            display_cols = ["bank","type","status","Settlement Date","Amount","remark","description"]
+            viz = viz.rename(columns={
+                "bank":"Bank","type":"Type","status":"Status","remark":"Remark","description":"Description"
+            })
+
+        st.dataframe(viz[display_cols].sort_values("Settlement Date"), use_container_width=True, height=360)
+
+        remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
+        if not remarks.empty:
+            st.subheader("List")
+            r2 = (
+                remarks.assign(
+                    settlement_date=remarks["settlement_date"].dt.strftime(DATE_FMT),
+                    amount=remarks["amount"].map(fmt_full_int)
+                )
+                .rename(columns={"settlement_date":"Settlement Date","bank":"Bank","amount":"Amount","remark":"Remark"})
+                [["Settlement Date","Bank","Amount","Remark"]]
+            )
+            st.dataframe(r2, use_container_width=True, height=220)
 
 st.markdown("---")
 
@@ -462,19 +466,13 @@ st.markdown("---")
 # Liquidity Trend
 # ----------------------------
 st.header("Liquidity Trend")
-# If chart not needed, comment out below and keep info
-try:
-    df_fm = parse_fund_movement(read_csv(LINKS["Fund Movement"])) if LINKS.get("Fund Movement") else pd.DataFrame()
-except Exception:
-    df_fm = pd.DataFrame()
-
 if df_fm.empty:
     st.info("No Fund Movement data (need Date + Total Liquidity).")
 else:
     try:
         import plotly.express as px
         fig = px.line(df_fm, x="date", y="total_liquidity", title="Total Liquidity Over Time")
-        fig.update_layout(margin=dict(l=20,r=20,t=50,b=20), height=360, yaxis_title="")
+        fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=360, yaxis_title="")
         st.plotly_chart(fig, use_container_width=True)
     except Exception:
         st.line_chart(df_fm.set_index("date")["total_liquidity"])
@@ -487,16 +485,16 @@ ins = []
 if not df_by_bank.empty:
     top = df_by_bank.sort_values("balance", ascending=False).head(1)
     if not top.empty:
-        ins.append(f"Top balance: **{top.iloc[0]['bank']}** ({fmt_num(top.iloc[0]['balance'])}).")
+        ins.append(f"Top balance: **{top.iloc[0]['bank']}** ({fmt_full_int(top.iloc[0]['balance'])}).")
 if not df_pay.empty:
     byb = df_pay.groupby("bank")["amount"].sum().sort_values(ascending=False)
     if len(byb) > 0:
-        ins.append(f"Highest approved payments bank: **{byb.index[0]}** ({fmt_num(byb.iloc[0])}).")
+        ins.append(f"Highest approved payments bank: **{byb.index[0]}** ({fmt_full_int(byb.iloc[0])}).")
 if not df_lc.empty:
-    next4 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None) + pd.Timedelta(days=3)
     today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-    next4_sum = df_lc.loc[df_lc["settlement_date"].between(today0, next4),'amount'].sum()
-    ins.append(f"Pending LC due in next 4 days: **{fmt_num(next4_sum)}**.")
+    next4 = today0 + pd.Timedelta(days=3)
+    next4_sum = df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
+    ins.append(f"Pending LC due in next 4 days: **{fmt_full_int(next4_sum)}**.")
 if ins:
     for i in ins:
         st.markdown(f"- {i}")
