@@ -4,11 +4,8 @@
 # - Approved Supplier Payments (Approved List)
 # - LC Settlements: Pending-only + Reference No (A/C #)
 # - Liquidity Trend + Quick Insights
-#
-# NOTE: Update the FILE_ID to your sheet; put your PNG logo next to app.py if you want it to render.
 
 import io
-import time
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -32,7 +29,7 @@ LINKS = {
 }
 
 COMPANY_NAME = "Issam Kabbani & Partners – Unitech"
-LOGO_PATH = "ikk_logo.png"            # <- put a 64–128 px square PNG beside app.py if you want a logo
+LOGO_PATH = "ikk_logo.png"            # optional small square PNG near app.py
 DATE_FMT = "%Y-%m-%d"
 TZ = "Asia/Riyadh"
 
@@ -98,10 +95,6 @@ def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
 # Parsers
 # ----------------------------
 def parse_bank_balance(df: pd.DataFrame):
-    """
-    A) If columns 'Bank' and ('Amount' or 'Amount(SAR)') exist -> sum by bank.
-    B) Otherwise, bank name column + date headers -> pick latest date column.
-    """
     c = cols_lower(df)
 
     # direct bank + amount table
@@ -172,11 +165,6 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    LC Settlements (Pending only) with REF (A/C #) support.
-    - Date column: prefer 'maturity date', else 'new maturity date'
-    - Amount: 'balance for settlement' > 'currently due' > 'amount(sar)' > 'amount'
-    """
     d = cols_lower(df)
 
     bank = next((c for c in d.columns if c.startswith("bank")), None)
@@ -350,19 +338,15 @@ with k4:
 st.markdown("---")
 
 # ----------------------------
-# Bank Balances — Cards/Table toggle
+# Bank Balances — Cards/Table toggle (radio fallback)
 # ----------------------------
 st.subheader("Bank Balances")
 
 # Sort (desc) so most significant appear first
 df_bal_sorted = df_by_bank.copy().sort_values("balance", ascending=False).reset_index(drop=True)
 
-view = st.segmented_control(
-    "Balances view",
-    options=["Cards", "Table"],
-    default="Cards",
-    help="Switch between Card and Table view",
-)
+# Use radio instead of segmented_control for compatibility
+view = st.radio("Balances view", ["Cards", "Table"], index=0, horizontal=True, key="bal_view")
 
 def bank_card(bank, balance):
     st.markdown(
@@ -447,7 +431,6 @@ st.header("LC Settlements — Pending Only")
 if df_lc.empty:
     st.info("No LC (Pending) data.")
 else:
-    # full range (date picker hidden per earlier requirement)
     dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
     d1, d2 = pd.to_datetime(dmin), pd.to_datetime(dmax) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
     lc_view = df_lc.loc[df_lc["settlement_date"].between(d1, d2)].copy()
@@ -479,6 +462,12 @@ st.markdown("---")
 # Liquidity Trend
 # ----------------------------
 st.header("Liquidity Trend")
+# If chart not needed, comment out below and keep info
+try:
+    df_fm = parse_fund_movement(read_csv(LINKS["Fund Movement"])) if LINKS.get("Fund Movement") else pd.DataFrame()
+except Exception:
+    df_fm = pd.DataFrame()
+
 if df_fm.empty:
     st.info("No Fund Movement data (need Date + Total Liquidity).")
 else:
@@ -504,6 +493,8 @@ if not df_pay.empty:
     if len(byb) > 0:
         ins.append(f"Highest approved payments bank: **{byb.index[0]}** ({fmt_num(byb.iloc[0])}).")
 if not df_lc.empty:
+    next4 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None) + pd.Timedelta(days=3)
+    today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
     next4_sum = df_lc.loc[df_lc["settlement_date"].between(today0, next4),'amount'].sum()
     ins.append(f"Pending LC due in next 4 days: **{fmt_num(next4_sum)}**.")
 if ins:
