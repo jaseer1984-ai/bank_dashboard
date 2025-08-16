@@ -240,7 +240,7 @@ with c_refresh:
     st.caption(datetime.now().strftime("Last refresh: %Y-%m-%d %H:%M:%S"))
     if st.button("Refresh", type="primary", use_container_width=True):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()   # <<<<<< FIX: use st.rerun() instead of st.experimental_rerun()
 
 st.markdown("")
 
@@ -339,7 +339,6 @@ if df_by_bank.empty:
     st.info("No balances found.")
 else:
     df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)
-    # Share % intentionally removed (hidden)
     df_bal_table = df_bal_table[["bank", "balance"]]
 
     styled = (
@@ -368,13 +367,11 @@ st.header("Approved List")
 if df_pay.empty:
     st.info("No Approved payments in sheet.")
 else:
-    # Optional filter by bank (kept available, but we don't show extra labels)
     banks = sorted(df_pay["bank"].dropna().unique())
     pick_banks = st.multiselect("Filter by Bank", banks, default=banks, label_visibility="collapsed")
 
     view = df_pay[df_pay["bank"].isin(pick_banks)].copy()
 
-    # Sum by bank
     grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
     st.markdown("**Sum by Bank**")
     grp_styled = (
@@ -384,7 +381,6 @@ else:
     )
     st.dataframe(grp_styled, use_container_width=True, height=220)
 
-    # Approved rows (renamed to Approved List)
     st.markdown("**Approved List (rows)**")
     show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view.columns]
     v = view[show_cols].rename(columns={
@@ -409,13 +405,11 @@ if df_lc.empty:
         "and any of: Balance for Settlement / Currently Due / Amount(SAR)."
     )
 else:
-    # Hide the date range input: we use the min->max range silently
     dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
     d1, d2 = pd.to_datetime(dmin), pd.to_datetime(dmax) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
 
     lc_view = df_lc.loc[df_lc["settlement_date"].between(d1, d2)].copy()
 
-    # Header KPIs for LC section
     cc1, cc2 = st.columns(2)
     with cc1:
         kpi_card("LC Amount (filtered sum)", lc_view["amount"].sum(), bg="#FFF7E6", border="#FDE9C8", text="#92400E")
@@ -437,7 +431,6 @@ else:
         )
         st.dataframe(viz_styled, use_container_width=True, height=360)
 
-        # Remarks/notes list (renamed to "List")
         remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
         if not remarks.empty:
             st.subheader("List")
