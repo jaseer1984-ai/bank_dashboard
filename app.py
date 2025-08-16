@@ -66,7 +66,6 @@ def cols_lower(df: pd.DataFrame) -> pd.DataFrame:
     out.columns = [str(c).strip().lower() for c in df.columns]
     return out
 
-# ✅ FIX: use `label`, not `name`
 def number_col(label: str, fmt: str = "%,.2f"):
     return st.column_config.NumberColumn(label=label, format=fmt)
 
@@ -130,6 +129,11 @@ def parse_bank_balance(df: pd.DataFrame):
     return by_bank, latest_date
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Supplier Payments:
+      Bank, Supplier Name, Currency, Amount/Amount(SAR), Status
+    Keep ONLY rows where Status contains 'Approved' (case-insensitive).
+    """
     d = cols_lower(df).rename(columns={
         "supplier name": "supplier",
         "amount(sar)": "amount_sar",
@@ -138,7 +142,8 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
     status_norm = d["status"].astype(str).str.strip().str.lower()
-    d = d.loc[status_norm.str_contains("approved")].copy()
+    # ✅ FIX here: use str.contains (not str_contains)
+    d = d.loc[status_norm.str.contains("approved")].copy()
     if d.empty:
         return pd.DataFrame()
     amt_col = "amount_sar" if "amount_sar" in d.columns else ("amount" if "amount" in d.columns else None)
@@ -153,6 +158,9 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    LC Settlements (Pending only) with REMARK support.
+    """
     d = cols_lower(df)
     bank = next((c for c in d.columns if c.startswith("bank")), None)
     date_col = None
