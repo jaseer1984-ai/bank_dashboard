@@ -268,6 +268,15 @@ def fmt_full_int(v) -> str:
     except (ValueError, TypeError):
         return str(v)
 
+def fmt_currency(v, currency="SAR") -> str:
+    """Format number as currency"""
+    try:
+        if pd.isna(v):
+            return "N/A"
+        return f"{currency} {float(v):,.0f}"
+    except (ValueError, TypeError):
+        return str(v)
+
 def fmt_currency_aligned(v, currency="SAR") -> str:
     """Format number as currency with right alignment using HTML"""
     try:
@@ -863,21 +872,9 @@ def main():
                 "bank": "Bank", "supplier": "Supplier", "currency": "Currency", 
                 "amount": "Amount", "status": "Status"
             }).copy()
-            v["Amount"] = v["Amount"].map(fmt_currency)
+            v["Amount"] = v["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
             
-            st.dataframe(
-                v, 
-                use_container_width=True, 
-                height=360,
-                column_config={
-                    "Amount": st.column_config.TextColumn(
-                        "Amount",
-                        help="Payment amount",
-                        width="medium",
-                    )
-                },
-                hide_index=True
-            )
+            st.dataframe(v, use_container_width=True, height=360, hide_index=True)
         else:
             st.info("No payments match the selected criteria.")
 
