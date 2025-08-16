@@ -66,8 +66,9 @@ def cols_lower(df: pd.DataFrame) -> pd.DataFrame:
     out.columns = [str(c).strip().lower() for c in df.columns]
     return out
 
-def number_col(name: str, fmt: str = "%,.2f"):
-    return st.column_config.NumberColumn(name=name, format=fmt)
+# ✅ FIX: use `label`, not `name`
+def number_col(label: str, fmt: str = "%,.2f"):
+    return st.column_config.NumberColumn(label=label, format=fmt)
 
 def kpi_card(title, value, subtitle="", bg="#EEF2FF", border="#C7D2FE", text="#111827"):
     st.markdown(
@@ -129,11 +130,6 @@ def parse_bank_balance(df: pd.DataFrame):
     return by_bank, latest_date
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Supplier Payments:
-      Bank, Supplier Name, Currency, Amount/Amount(SAR), Status
-    Keep ONLY rows where Status contains 'Approved' (case-insensitive).
-    """
     d = cols_lower(df).rename(columns={
         "supplier name": "supplier",
         "amount(sar)": "amount_sar",
@@ -142,7 +138,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
     status_norm = d["status"].astype(str).str.strip().str.lower()
-    d = d.loc[status_norm.str.contains("approved")].copy()
+    d = d.loc[status_norm.str_contains("approved")].copy()
     if d.empty:
         return pd.DataFrame()
     amt_col = "amount_sar" if "amount_sar" in d.columns else ("amount" if "amount" in d.columns else None)
@@ -157,16 +153,8 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    LC Settlements (Pending only) with REMARK support.
-    - Date column: prefer 'maturity date', else 'new maturity date'
-    - Amount column priority: 'balance for settlement' > 'currently due' > 'amount(sar)' > 'amount'
-    - Keep only 'status' == 'Pending'
-    """
     d = cols_lower(df)
     bank = next((c for c in d.columns if c.startswith("bank")), None)
-
-    # Date priority
     date_col = None
     for cand in d.columns:
         if "maturity" in cand and "new" not in cand:
@@ -175,8 +163,6 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
         for cand in d.columns:
             if "new" in cand and "maturity" in cand:
                 date_col = cand; break
-
-    # Amount priority
     amount_col = None
     for cand in d.columns:
         if "balance" in cand and "settlement" in cand:
@@ -187,7 +173,6 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
                 amount_col = cand; break
     if amount_col is None:
         amount_col = "amount(sar)" if "amount(sar)" in d.columns else ("amount" if "amount" in d.columns else None)
-
     status_col = next((c for c in d.columns if "status" in c), None)
     type_col   = next((c for c in d.columns if "type" in c), None)
     remark_col = next((c for c in d.columns if "remark" in c), None)
@@ -221,7 +206,7 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("date")
 
 # ---------------------------------------------------------------------------
-# HEADER with top-right Refresh button (uses st.rerun only)
+# HEADER with top-right Refresh button
 # ---------------------------------------------------------------------------
 c_left, c_btn = st.columns([1, 0.13])
 with c_left:
@@ -230,7 +215,7 @@ with c_left:
 with c_btn:
     if st.button("🔁 Refresh", use_container_width=True):
         st.cache_data.clear()
-        st.rerun()   # <-- fixed: no experimental_rerun
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Load data
@@ -261,7 +246,7 @@ except Exception as e:
     df_fm_raw = pd.DataFrame()
 
 # ---------------------------------------------------------------------------
-# Parse (business logic unchanged)
+# Parse (business logic)
 # ---------------------------------------------------------------------------
 df_by_bank, bal_date = pd.DataFrame(), None
 if not df_bal_raw.empty:
@@ -302,21 +287,15 @@ total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
 banks_cnt = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
 
 today = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-next4 = today + pd.Timedelta(days=3)
+next4 = today + timedelta(days=3)
 
-lc_next4_sum = (
-    df_lc.loc[df_lc["settlement_date"].between(today, next4), "amount"].sum()
-    if not df_lc.empty else 0.0
-)
+lc_next4_sum = df_lc.loc[df_lc["settlement_date"].between(today, next4), "amount"].sum() if not df_lc.empty else 0.0
 approved_sum = df_pay["amount"].sum() if not df_pay.empty else 0.0
 
 k1, k2, k3, k4 = st.columns(4)
-with k1:
-    kpi_card("Total Balance", total_balance, f"As of {bal_date}", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
-with k2:
-    kpi_card("Approved Payments (sum)", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
-with k3:
-    kpi_card("LC due (next 4 days) • Pending", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
+with k1: kpi_card("Total Balance", total_balance, f"As of {bal_date}", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
+with k2: kpi_card("Approved Payments (sum)", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
+with k3: kpi_card("LC due (next 4 days) • Pending", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
 with k4:
     st.markdown(
         f"""
@@ -400,14 +379,13 @@ else:
         dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
         rng = st.date_input("Settlement date range", (dmin, dmax))
 
-    d1, d2 = pd.to_datetime(rng[0]), pd.to_datetime(rng[1]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    d1, d2 = pd.to_datetime(rng[0]), pd.to_datetime(rng[1]) + timedelta(days=1) - timedelta(seconds=1)
     mask = df_lc["bank"].isin(sel_banks) & df_lc["settlement_date"].between(d1, d2)
     lc_view = df_lc.loc[mask].copy()
 
     lc_sum = lc_view["amount"].sum(); lc_cnt = len(lc_view)
     cc1, cc2 = st.columns(2)
-    with cc1:
-        kpi_card("LC Amount (filtered sum)", lc_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
+    with cc1: kpi_card("LC Amount (filtered sum)", lc_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
     with cc2:
         st.markdown(
             f"""
@@ -475,7 +453,7 @@ if not df_pay.empty:
         ins.append(f"Highest approved payments bank: **{byb.index[0]}** ({byb.iloc[0]:,.2f}).")
 if not df_lc.empty:
     today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-    next4_sum = df_lc.loc[df_lc['settlement_date'].between(today0, today0 + pd.Timedelta(days=3)),'amount'].sum()
+    next4_sum = df_lc.loc[df_lc['settlement_date'].between(today0, today0 + timedelta(days=3)),'amount'].sum()
     ins.append(f"Pending LC due in next 4 days: **{next4_sum:,.2f}**.")
 if ins:
     for i in ins:
