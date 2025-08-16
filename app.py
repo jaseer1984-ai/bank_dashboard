@@ -137,6 +137,38 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
 # ----------------------------
 # Enhanced Helper Functions
 # ----------------------------
+def simple_kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
+    """Ultra-simple KPI card to avoid any naming conflicts"""
+    try:
+        # Simple number formatting
+        if pd.isna(value) or value is None:
+            display_value = "N/A"
+        elif isinstance(value, (int, float)):
+            display_value = f"{float(value):,.0f}"
+        else:
+            display_value = str(value)
+        
+        card_html = f"""
+        <div style="
+            background:{bg};
+            border:1px solid {border};
+            border-radius:12px;
+            padding:14px 16px;
+            box-shadow:0 1px 6px rgba(0,0,0,.04);">
+            <div style="font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em">
+                {title}
+            </div>
+            <div style="font-size:28px;font-weight:800;color:{text};margin-top:4px;text-align:right;">
+                {display_value}
+            </div>
+        </div>
+        """
+        
+        st.markdown(card_html, unsafe_allow_html=True)
+        
+    except Exception as e:
+        st.error(f"Card error for {title}: {str(e)}")
+
 def _to_number(x) -> float:
     """Enhanced number conversion with validation and bounds checking"""
     if pd.isna(x) or x == '':
