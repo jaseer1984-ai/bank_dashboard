@@ -1,15 +1,8 @@
 # Treasury Dashboard — Google Sheets
-# (Same layout as before; ONLY fix is enforcing numeric types so no warning icons)
-# - Top-right Refresh button
-# - KPIs
-# - Bank Balances table
-# - Approved Supplier Payments (Approved only)
-# - LC Settlements (Pending only + Remarks)
-# - Liquidity Trend chart
-# - Quick Insights
+# (Same layout; ONLY fix: enforce numeric dtype for table columns to remove ⚠️ icons)
 
 import io
-from datetime import datetime, timedelta
+from datetime import timedelta
 import numpy as np
 import pandas as pd
 import requests
@@ -33,7 +26,7 @@ DATE_FMT = "%Y-%m-%d"
 TZ = "Asia/Riyadh"
 
 # ---------------------------------------------------------------------------
-# Styles (unchanged)
+# Styles (same)
 # ---------------------------------------------------------------------------
 st.markdown(
     """
@@ -49,7 +42,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers (same)
 # ---------------------------------------------------------------------------
 def _to_number(x):
     if pd.isna(x): return np.nan
@@ -88,7 +81,7 @@ def kpi_card(title, value, subtitle="", bg="#EEF2FF", border="#C7D2FE", text="#1
     )
 
 # ---------------------------------------------------------------------------
-# Parsers (unchanged logic)
+# Parsers (same logic)
 # ---------------------------------------------------------------------------
 def parse_bank_balance(df: pd.DataFrame):
     c = cols_lower(df)
@@ -204,7 +197,7 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("date")
 
 # ---------------------------------------------------------------------------
-# Header (unchanged)
+# Header (same)
 # ---------------------------------------------------------------------------
 c_left, c_btn = st.columns([1, 0.13])
 with c_left:
@@ -216,7 +209,7 @@ with c_btn:
         st.rerun()
 
 # ---------------------------------------------------------------------------
-# Load data
+# Load data (same)
 # ---------------------------------------------------------------------------
 notes = []
 try:
@@ -244,7 +237,7 @@ except Exception as e:
     df_fm_raw = pd.DataFrame()
 
 # ---------------------------------------------------------------------------
-# Parse
+# Parse (same)
 # ---------------------------------------------------------------------------
 df_by_bank, bal_date = pd.DataFrame(), None
 if not df_bal_raw.empty:
@@ -279,7 +272,7 @@ if notes:
         st.warning(n)
 
 # ---------------------------------------------------------------------------
-# KPIs (unchanged)
+# KPIs (same)
 # ---------------------------------------------------------------------------
 total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
 banks_cnt = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
@@ -290,24 +283,26 @@ next4 = today + timedelta(days=3)
 lc_next4_sum = df_lc.loc[df_lc["settlement_date"].between(today, next4), "amount"].sum() if not df_lc.empty else 0.0
 approved_sum = df_pay["amount"].sum() if not df_pay.empty else 0.0
 
-k1, k2, k3, k4 = st.columns(4)
-with k1: kpi_card("Total Balance", total_balance, f"As of {bal_date}", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
-with k2: kpi_card("Approved Payments (sum)", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
-with k3: kpi_card("LC due (next 4 days) • Pending", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
-with k4:
-    st.markdown(
-        f"""
-        <div class="kpi-box" style="background:#FFF1F2;border:1px solid #FBD5D8;border-radius:12px;padding:12px 14px;">
-            <div class="kpi-title">Banks</div>
-            <div class="kpi-value" style="color:#9F1239">{banks_cnt:,.0f}</div>
-            <div class="kpi-sub"></div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+def kpi_box():
+    k1, k2, k3, k4 = st.columns(4)
+    with k1: kpi_card("Total Balance", total_balance, f"As of {bal_date}", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
+    with k2: kpi_card("Approved Payments (sum)", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
+    with k3: kpi_card("LC due (next 4 days) • Pending", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
+    with k4:
+        st.markdown(
+            f"""
+            <div class="kpi-box" style="background:#FFF1F2;border:1px solid #FBD5D8;border-radius:12px;padding:12px 14px;">
+                <div class="kpi-title">Banks</div>
+                <div class="kpi-value" style="color:#9F1239">{banks_cnt:,.0f}</div>
+                <div class="kpi-sub"></div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+kpi_box()
 
 # ---------------------------------------------------------------------------
-# Bank Balances (table) — ONLY change: enforce numeric before display
+# Bank Balances (Table)  —— ONLY change: coerce numeric dtype before display
 # ---------------------------------------------------------------------------
 st.subheader("Bank Balances (Table)")
 if df_by_bank.empty:
@@ -315,14 +310,15 @@ if df_by_bank.empty:
 else:
     df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)
 
-    # 🔧 force numeric to remove warning icons
-    df_bal_table["balance"] = pd.to_numeric(df_bal_table["balance"], errors="coerce")
-    total = df_bal_table["balance"].sum()
-    df_bal_table["share_%"] = (df_bal_table["balance"] / total * 100)
-    df_bal_table["share_%"] = pd.to_numeric(df_bal_table["share_%"], errors="coerce")
+    # enforce numeric dtypes
+    df_bal_table["balance"] = pd.to_numeric(df_bal_table["balance"], errors="coerce").astype("Float64")
+    total = float(df_bal_table["balance"].sum() or 0.0)
+    share = np.where(total > 0, df_bal_table["balance"] / total * 100.0, np.nan)
+    df_bal_table["share_%"] = pd.Series(share).astype("Float64")
 
+    show_bal = df_bal_table.rename(columns={"bank":"Bank","balance":"Balance","share_%":"Share %"})
     st.dataframe(
-        df_bal_table.rename(columns={"bank":"Bank","balance":"Balance","share_%":"Share %"}),
+        show_bal,
         use_container_width=True,
         height=340,
         column_config={
@@ -334,7 +330,7 @@ else:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Supplier Payments (Approved only) — enforce numeric before display
+# Supplier Payments (Approved only)  —— coerce numeric dtype before display
 # ---------------------------------------------------------------------------
 st.header("Approved Supplier Payments")
 if df_pay.empty:
@@ -346,21 +342,27 @@ else:
         pick_banks = st.multiselect("Filter by Bank", banks, default=banks)
 
     view = df_pay[df_pay["bank"].isin(pick_banks)].copy()
-    view["amount"] = pd.to_numeric(view["amount"], errors="coerce")
+    view["amount"] = pd.to_numeric(view["amount"], errors="coerce").astype("Float64")
 
     grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
+    grp_show = grp.rename(columns={"bank":"Bank","amount":"Amount"})
+    grp_show["Amount"] = pd.to_numeric(grp_show["Amount"], errors="coerce").astype("Float64")
+
     st.markdown("**Sum by Bank (Approved)**")
     st.dataframe(
-        grp.rename(columns={"bank":"Bank","amount":"Amount"}),
+        grp_show,
         use_container_width=True,
         height=240,
         column_config={"Amount": number_col("Amount", "%,.2f")}
     )
 
     st.markdown("**Approved rows**")
-    show_cols = [c for c in ["bank","supplier","currency","amount","status"] if c in view.columns]
+    rows_show = view[[c for c in ["bank","supplier","currency","amount","status"] if c in view.columns]].rename(
+        columns={"bank":"Bank","supplier":"Supplier","currency":"Curr","amount":"Amount","status":"Status"}
+    )
+    rows_show["Amount"] = pd.to_numeric(rows_show["Amount"], errors="coerce").astype("Float64")
     st.dataframe(
-        view[show_cols].rename(columns={"bank":"Bank","supplier":"Supplier","currency":"Curr","amount":"Amount","status":"Status"}),
+        rows_show,
         use_container_width=True,
         height=380,
         column_config={"Amount": number_col("Amount", "%,.2f")}
@@ -369,7 +371,7 @@ else:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# LC Settlements — Pending ONLY (enforce numeric)
+# LC Settlements — Pending ONLY  —— coerce numeric dtype before display
 # ---------------------------------------------------------------------------
 st.header("LC Settlements — Pending Only")
 if df_lc.empty:
@@ -387,10 +389,9 @@ else:
     mask = df_lc["bank"].isin(sel_banks) & df_lc["settlement_date"].between(d1, d2)
     lc_view = df_lc.loc[mask].copy()
 
-    # 🔧 numeric
-    lc_view["amount"] = pd.to_numeric(lc_view["amount"], errors="coerce")
+    lc_view["amount"] = pd.to_numeric(lc_view["amount"], errors="coerce").astype("Float64")
 
-    lc_sum = lc_view["amount"].sum(); lc_cnt = len(lc_view)
+    lc_sum = float(lc_view["amount"].sum() or 0.0); lc_cnt = len(lc_view)
     cc1, cc2 = st.columns(2)
     with cc1: kpi_card("LC Amount (filtered sum)", lc_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
     with cc2:
@@ -409,6 +410,7 @@ else:
         viz = lc_view.copy()
         viz["Settlement Date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
         viz = viz.rename(columns={"bank":"Bank","type":"Type","status":"Status","amount":"Amount","remark":"Remark","description":"Description"})
+        viz["Amount"] = pd.to_numeric(viz["Amount"], errors="coerce").astype("Float64")
         st.dataframe(
             viz[["Bank","Type","Status","Settlement Date","Amount","Remark","Description"]].sort_values("Settlement Date"),
             use_container_width=True,
@@ -421,7 +423,7 @@ else:
             st.subheader("Remarks")
             remarks["Settlement Date"] = remarks["settlement_date"].dt.strftime(DATE_FMT)
             remarks = remarks.rename(columns={"bank":"Bank","amount":"Amount","remark":"Remark"})
-            remarks["Amount"] = pd.to_numeric(remarks["Amount"], errors="coerce")
+            remarks["Amount"] = pd.to_numeric(remarks["Amount"], errors="coerce").astype("Float64")
             st.dataframe(
                 remarks[["Settlement Date","Bank","Amount","Remark"]].sort_values("Settlement Date"),
                 use_container_width=True,
@@ -432,12 +434,10 @@ else:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Liquidity Trend (unchanged)
+# Liquidity Trend (same)
 # ---------------------------------------------------------------------------
 st.header("Liquidity Trend")
-if df_fm.empty:
-    st.info("No Fund Movement data (need Date + Total Liquidity).")
-else:
+if 'df_fm' in locals() and not df_fm.empty:
     try:
         import plotly.express as px
         fig = px.line(df_fm, x="date", y="total_liquidity", title="Total Liquidity Over Time")
@@ -445,9 +445,11 @@ else:
         st.plotly_chart(fig, use_container_width=True)
     except Exception:
         st.line_chart(df_fm.set_index("date")["total_liquidity"])
+else:
+    st.info("No Fund Movement data (need Date + Total Liquidity).")
 
 # ---------------------------------------------------------------------------
-# Quick Insights (unchanged)
+# Quick Insights (same)
 # ---------------------------------------------------------------------------
 st.header("Quick Insights")
 ins = []
