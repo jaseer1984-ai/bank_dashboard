@@ -132,7 +132,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
 
-    # Robust status filtering
+    # Robust status filtering (fix for Series.strip error)
     status_norm = d["status"].astype(str).str.strip().str.lower()
     approved_mask = status_norm.str.contains("approved")  # only "Approved"
     d = d.loc[approved_mask].copy()
@@ -150,6 +150,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     # Keep tidy columns
     keep = [c for c in ["bank","supplier","currency","amount","status"] if c in d.columns]
     out = d[keep].dropna(subset=["amount"]).copy()
+    # Re-title case the status for display
     if "status" in out.columns:
         out["status"] = out["status"].astype(str).str.title()
     return out
@@ -157,6 +158,9 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     """
     LC Settlements (Pending only) with REMARK support.
+    - Date column: prefer 'maturity date', else 'new maturity date'
+    - Amount column priority: 'balance for settlement' > 'currently due' > 'amount(sar)' > 'amount'
+    - Keep only 'status' == 'Pending'
     """
     d = cols_lower(df)
 
@@ -300,32 +304,23 @@ with c3: kpi_card("LC due (next 4 days) • Pending", lc_next4_sum, bg="#FFF7E6"
 with c4: kpi_card("Banks", banks_cnt, bg="#FFF1F2", border="#FBD5D8", text="#9F1239")
 
 # ---------------------------------------------------------------------------
-# Bank Balances — TABLE VIEW (numeric dtypes + NumberColumn formatting)
+# Bank Balances — TABLE VIEW
 # ---------------------------------------------------------------------------
 st.subheader("Bank Balances (Table)")
 if df_by_bank.empty:
     st.info("No balances found.")
 else:
-    df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)
-
-    # KEEP as real numbers
-    df_bal_table["balance"] = pd.to_numeric(df_bal_table["balance"], errors="coerce")
-    total = float(df_bal_table["balance"].sum() or 0.0)
-    df_bal_table["share_%"] = np.where(total > 0, df_bal_table["balance"] / total * 100.0, np.nan)
-
-    st.dataframe(
-        df_bal_table.rename(columns={"bank":"Bank","balance":"Balance","share_%":"Share %"}),
-        use_container_width=True,
-        height=320,
-        column_config={
-            "Balance": st.column_config.NumberColumn("Balance", format="%,.2f"),
-            "Share %": st.column_config.NumberColumn("Share %", format="%,.2f%%"),
-        }
-    )
+    df_bal_table = df_by_bank.copy()
+    df_bal_table = df_bal_table.sort_values("balance", ascending=False)
+    total = df_bal_table["balance"].sum()
+    df_bal_table["share_%"] = (df_bal_table["balance"] / total * 100).round(2)
+    df_bal_table["balance"] = df_bal_table["balance"].map(fmt_num)
+    st.dataframe(df_bal_table.rename(columns={"bank":"Bank","balance":"Balance","share_%":"Share %"}),
+                 use_container_width=True, height=320)
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Supplier Payments (Approved only) — numeric dtypes + NumberColumn
+# Supplier Payments (Approved only)
 # ---------------------------------------------------------------------------
 st.header("Approved Supplier Payments")
 if df_pay.empty:
@@ -337,32 +332,22 @@ else:
         pick_banks = st.multiselect("Filter by Bank", banks, default=banks)
 
     view = df_pay[df_pay["bank"].isin(pick_banks)].copy()
-    view["amount"] = pd.to_numeric(view["amount"], errors="coerce")
 
     grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
     st.markdown("**Sum by Bank (Approved)**")
-    st.dataframe(
-        grp.rename(columns={"bank":"Bank","amount":"Amount"}),
-        use_container_width=True,
-        height=220,
-        column_config={"Amount": st.column_config.NumberColumn("Amount", format="%,.2f")}
-    )
+    st.dataframe(grp.assign(amount=grp["amount"].map(fmt_num)).rename(columns={"bank":"Bank","amount":"Amount"}),
+                 use_container_width=True, height=220)
 
     st.markdown("**Approved rows**")
     show_cols = [c for c in ["bank","supplier","currency","amount","status"] if c in view.columns]
-    table_rows = view[show_cols].rename(columns={"bank":"Bank","supplier":"Supplier","currency":"Curr","amount":"Amount","status":"Status"})
-    table_rows["Amount"] = pd.to_numeric(table_rows["Amount"], errors="coerce")
-    st.dataframe(
-        table_rows,
-        use_container_width=True,
-        height=360,
-        column_config={"Amount": st.column_config.NumberColumn("Amount", format="%,.2f")}
-    )
+    v = view.copy(); v["amount"] = v["amount"].map(fmt_num)
+    st.dataframe(v[show_cols].rename(columns={"bank":"Bank","supplier":"Supplier","currency":"Curr","amount":"Amount","status":"Status"}),
+                 use_container_width=True, height=360)
 
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# LC Settlements — PENDING ONLY (with REMARKS) — numeric + NumberColumn
+# LC Settlements — PENDING ONLY (with REMARKS)
 # ---------------------------------------------------------------------------
 st.header("LC Settlements — Pending Only")
 if df_lc.empty:
@@ -390,33 +375,24 @@ else:
 
     if not lc_view.empty:
         viz = lc_view.copy()
-        viz["Settlement Date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
-        viz = viz.rename(columns={"bank":"Bank","type":"Type","status":"Status","amount":"Amount","remark":"Remark","description":"Description"})
-        viz["Amount"] = pd.to_numeric(viz["Amount"], errors="coerce")
-
-        st.dataframe(
-            viz[["Bank","Type","Status","Settlement Date","Amount","Remark","Description"]].sort_values("Settlement Date"),
-            use_container_width=True,
-            height=360,
-            column_config={"Amount": st.column_config.NumberColumn("Amount", format="%,.2f")}
-        )
+        viz["settlement_date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
+        viz["amount"] = viz["amount"].map(fmt_num)
+        show = [c for c in ["bank","type","status","settlement_date","amount","remark","description"] if c in viz.columns]
+        st.dataframe(viz[show].rename(columns={
+            "bank":"Bank","type":"Type","status":"Status","settlement_date":"Settlement Date","amount":"Amount","remark":"Remark","description":"Description"
+        }).sort_values("Settlement Date"),
+        use_container_width=True, height=360)
 
         # Remarks panel — rows where remark has text
         remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
         if not remarks.empty:
             st.subheader("Remarks")
-            remarks["Settlement Date"] = remarks["settlement_date"].dt.strftime(DATE_FMT)
-            remarks_show = remarks.rename(columns={"bank":"Bank","amount":"Amount","remark":"Remark"})[
-                ["Settlement Date","Bank","Amount","Remark"]
-            ].sort_values("Settlement Date")
-            remarks_show["Amount"] = pd.to_numeric(remarks_show["Amount"], errors="coerce")
-
-            st.dataframe(
-                remarks_show,
-                use_container_width=True,
-                height=220,
-                column_config={"Amount": st.column_config.NumberColumn("Amount", format="%,.2f")}
-            )
+            remarks = remarks.assign(
+                settlement_date=remarks["settlement_date"].dt.strftime(DATE_FMT),
+                amount=remarks["amount"].map(fmt_num)
+            )[["settlement_date","bank","amount","remark"]].sort_values("settlement_date")
+            remarks = remarks.rename(columns={"settlement_date":"Settlement Date","bank":"Bank","amount":"Amount","remark":"Remark"})
+            st.dataframe(remarks, use_container_width=True, height=220)
 
 st.markdown("---")
 
