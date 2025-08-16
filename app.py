@@ -2,10 +2,10 @@
 # - Brand: Issam Kabbani & Partners – Unitech + small logo 'ikk_logo.png'
 # - Top-right Refresh button
 # - KPI numbers right-aligned (no "(sum)" / "• Pending")
-# - Bank Balances as cards (4 per row). No charts/sparklines/tables
+# - Bank Balances as cards (4 per row). No tables for balances
 # - Supplier Payments: Approved List only (Amount right aligned)
 # - LC Settlements: Pending only, date filter hidden, amounts right aligned
-# - No other charts
+# - Liquidity Trend chart + Quick Insights
 # - Footer: Created By Jaseer Pykarathodi
 
 import io
@@ -47,7 +47,7 @@ LINKS = {
 # HELPERS
 # -----------------------------------------------------------------------------
 def _to_number(x):
-    """Convert values like '1,234.56' or '10%' to float; return NaN on failure."""
+    """Convert '1,234.56' or '10%' to float; return NaN on failure."""
     if pd.isna(x):
         return np.nan
     s = str(x).strip().replace(",", "")
@@ -77,7 +77,6 @@ def fmt_num(v) -> str:
         return f"{float(v):,.2f}"
     except Exception:
         return str(v)
-
 
 # -----------------------------------------------------------------------------
 # PARSERS
@@ -137,9 +136,7 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[pd.Time
 
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return only Approved rows with columns: bank, supplier, currency, amount, status
-    """
+    """Return only Approved rows with columns: bank, supplier, currency, amount, status"""
     d = cols_lower(df).rename(columns={
         "supplier name": "supplier",
         "amount(sar)": "amount_sar",
@@ -170,10 +167,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return LC rows that are Pending only, with columns:
-      bank, type, status, settlement_date, amount, remark, description
-    """
+    """Return LC rows that are Pending only."""
     d = cols_lower(df)
     bank = next((c for c in d.columns if c.startswith("bank")), None)
 
@@ -225,6 +219,19 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
+    """Return liquidity series with columns: date, total_liquidity."""
+    d = cols_lower(df)
+    date_col = "date" if "date" in d.columns else None
+    liq_col = next((c for c in d.columns if ("total" in c and "liquidity" in c)), None)
+    if not date_col or not liq_col:
+        return pd.DataFrame()
+    out = pd.DataFrame({
+        "date": pd.to_datetime(d[date_col], errors="coerce"),
+        "total_liquidity": d[liq_col].map(_to_number),
+    }).dropna()
+    return out.sort_values("date")
+
 # -----------------------------------------------------------------------------
 # UI PRIMITIVES
 # -----------------------------------------------------------------------------
@@ -263,7 +270,6 @@ def bank_card(bank: str, balance: float):
         """,
         unsafe_allow_html=True
     )
-
 
 # -----------------------------------------------------------------------------
 # HEADER (logo + title + top-right refresh)
@@ -310,6 +316,12 @@ except Exception as e:
     notes.append(f"SETTLEMENTS load error: {e}")
     df_lc_raw = pd.DataFrame()
 
+try:
+    df_fm_raw = read_csv(LINKS["Fund Movement"])
+except Exception as e:
+    notes.append(f"Fund Movement load error: {e}")
+    df_fm_raw = pd.DataFrame()
+
 # -----------------------------------------------------------------------------
 # PARSE DATA
 # -----------------------------------------------------------------------------
@@ -333,6 +345,13 @@ if not df_lc_raw.empty:
         df_lc = parse_settlements(df_lc_raw)
     except Exception as e:
         notes.append(f"SETTLEMENTS parse: {e}")
+
+df_fm = pd.DataFrame()
+if not df_fm_raw.empty:
+    try:
+        df_fm = parse_fund_movement(df_fm_raw)
+    except Exception as e:
+        notes.append(f"Fund Movement parse: {e}")
 
 for n in notes:
     st.warning(n)
@@ -450,11 +469,55 @@ else:
         viz_style = viz.style.format({"Amount": "{:,.2f}"}).set_properties(subset=["Amount"], **{"text-align": "right"})
         st.dataframe(viz_style, use_container_width=True, height=380)
 
-st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# LIQUIDITY TREND
+# -----------------------------------------------------------------------------
+st.header("Liquidity Trend")
+if df_fm.empty:
+    st.info("No Fund Movement data (need Date + Total Liquidity).")
+else:
+    try:
+        import plotly.express as px
+        fig = px.line(df_fm, x="date", y="total_liquidity", title="Total Liquidity Over Time")
+        fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=360, yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception:
+        st.line_chart(df_fm.set_index("date")["total_liquidity"])
+
+# -----------------------------------------------------------------------------
+# QUICK INSIGHTS
+# -----------------------------------------------------------------------------
+st.header("Quick Insights")
+ins = []
+if not df_by_bank.empty:
+    top = df_by_bank.sort_values("balance", ascending=False).head(1)
+    if not top.empty:
+        ins.append(f"Top balance: **{top.iloc[0]['bank']}** ({fmt_num(top.iloc[0]['balance'])}).")
+if not df_pay.empty:
+    byb = df_pay.groupby("bank")["amount"].sum().sort_values(ascending=False)
+    if len(byb) > 0:
+        ins.append(f"Highest approved payments bank: **{byb.index[0]}** ({fmt_num(byb.iloc[0])}).")
+if not df_lc.empty:
+    today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
+    next4 = today0 + pd.Timedelta(days=3)
+    next4_sum = df_lc.loc[df_lc['settlement_date'].between(today0, next4), 'amount'].sum()
+    ins.append(f"Pending LC due in next 4 days: **{fmt_num(next4_sum)}**.")
+if not df_fm.empty:
+    latest = df_fm.dropna().sort_values("date").iloc[-1]["total_liquidity"]
+    ins.append(f"Latest total liquidity: **{fmt_num(latest)}**.")
+
+if ins:
+    for i in ins:
+        st.markdown(f"- {i}")
+else:
+    st.info("Insights will appear once data is available.")
 
 # -----------------------------------------------------------------------------
 # FOOTER
 # -----------------------------------------------------------------------------
+st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
     "<p style='text-align:center; color:grey;'>Created By <b>Jaseer Pykarathodi</b></p>",
     unsafe_allow_html=True,
