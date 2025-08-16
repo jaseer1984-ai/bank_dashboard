@@ -436,3 +436,27 @@ if ins:
     for i in ins: st.markdown(f"- {i}")
 else:
     st.info("Insights will appear once data is available.")
+# ================================
+# REFRESH BUTTON (TOP-RIGHT)
+# ================================
+col1, col2 = st.columns([9, 1])  # Adjust ratio so button moves right
+with col2:
+    if st.button("🔄 Refresh", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+# ================================
+# BANK BALANCE TABLE (CUSTOM WIDTH)
+# ================================
+st.markdown("### 🏦 Bank Balances")
+
+# Adjust column widths with Pandas Styler
+bank_table = bank_df.style.set_table_styles(
+    [
+        {"selector": "th.col0", "props": [("width", "12em")]},   # BANK col
+        {"selector": "th.col1", "props": [("width", "18em")]},   # Balance col
+        {"selector": "th.col2", "props": [("width", "12em")]}    # Share col
+    ]
+)
+
+st.dataframe(bank_table, use_container_width=True)
