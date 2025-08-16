@@ -754,19 +754,19 @@ def main():
             cols = st.columns(4)
             for i, row in df_bal_view.iterrows():
                 with cols[int(i) % 4]:
-                    # Determine card color based on balance amount - SIMPLE VERSION
+                    # Determine card color based on balance amount - VERY LIGHT COLORS
                     balance = row['balance']
                     if balance > 500000:
-                        bg_color = "#a5b4fc"
+                        bg_color = "#e0e7ff"  # Very light lavender
                         icon = "💎"
                     elif balance > 100000:
-                        bg_color = "#fbb6ce"
+                        bg_color = "#fce7f3"  # Very light pink
                         icon = "🔹"
                     elif balance > 50000:
-                        bg_color = "#7dd3fc"
+                        bg_color = "#e0f2fe"  # Very light sky blue
                         icon = "💠"
                     else:
-                        bg_color = "#86efac"
+                        bg_color = "#ecfdf5"  # Very light mint green
                         icon = "💚"
                     
                     # Use Streamlit's built-in container instead of raw HTML
