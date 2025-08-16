@@ -1,12 +1,5 @@
 # app.py — Treasury Dashboard (Google Sheets)
-# - Logo in header + top-right Refresh button
-# - Company name: "Issam Kabbani & Partners – Unitech"
-# - KPI numbers right-aligned
-# - Bank balances as table (Share% hidden)
-# - Supplier payments: "Approved List", right-aligned amount
-# - LC Settlements: Pending-only, hide remark list, ADD "A/C #" column if available
-# - Liquidity trend
-# - Footer: "Created By Jaseer Pykarathodi"
+# Issam Kabbani & Partners – Unitech
 
 import io
 import time
@@ -16,14 +9,21 @@ import pandas as pd
 import requests
 import streamlit as st
 
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Page setup
-# ----------------------------
-st.set_page_config(page_title="Treasury Dashboard", layout="wide", initial_sidebar_state="collapsed")
+# ──────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Issam Kabbani & Partners – Unitech — Treasury Dashboard",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-# ----------------------------
+COMPANY_NAME = "Issam Kabbani & Partners – Unitech"
+LOGO_PATH = "ikk_logo.png"   # ← put your logo file next to app.py; rename if needed
+DATE_FMT = "%Y-%m-%d"
+TZ = "Asia/Riyadh"
+
 # Google Sheets links (same file id, different gids per sheet)
-# ----------------------------
 FILE_ID = "1371amvaCbejUWVJI_moWdIchy5DF1lPO"
 LINKS = {
     "BANK BALANCE":      f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=860709395",
@@ -32,14 +32,9 @@ LINKS = {
     "Fund Movement":     f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=66055663",
 }
 
-COMPANY_NAME = "Issam Kabbani & Partners – Unitech"
-LOGO_PATH = "ikk_logo.png"          # save your logo as this file next to app.py
-DATE_FMT = "%Y-%m-%d"
-TZ = "Asia/Riyadh"
-
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 def _to_number(x):
     if pd.isna(x):
         return np.nan
@@ -69,7 +64,7 @@ def fmt_num(v):
         return str(v)
 
 def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
-    # value is right-aligned
+    # value right-aligned
     st.markdown(
         f"""
         <div style="
@@ -85,9 +80,9 @@ def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
         unsafe_allow_html=True
     )
 
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Parsers
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 def parse_bank_balance(df: pd.DataFrame):
     """
     A) If columns 'Bank' and ('Amount' or 'Amount(SAR)') exist -> sum by bank.
@@ -95,7 +90,7 @@ def parse_bank_balance(df: pd.DataFrame):
     """
     c = cols_lower(df)
 
-    # Case A
+    # Case A — already tall format
     if "bank" in c.columns and ("amount" in c.columns or "amount(sar)" in c.columns):
         amt_col = "amount" if "amount" in c.columns else "amount(sar)"
         out = pd.DataFrame({
@@ -106,9 +101,8 @@ def parse_bank_balance(df: pd.DataFrame):
         by_bank = out.groupby("bank", as_index=False)["balance"].sum()
         return by_bank, latest_date
 
-    # Case B
+    # Case B — wide with date columns
     raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
-
     bank_col = None
     for col in raw.columns:
         if raw[col].dtype == object and (raw[col].dropna().astype(str).str.strip() != "").sum() >= 3:
@@ -138,7 +132,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     d = cols_lower(df).rename(columns={
         "supplier name": "supplier",
         "amount(sar)": "amount_sar",
-        "order/sh/branch": "order_branch"
+        "order/sh/branch": "order_branch",
     })
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
@@ -164,49 +158,30 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Pending-only LC table, includes A/C # if present.
+    Pending-only LC settlements. If an 'A/C #' (or similar) column exists, include it.
     """
     d = cols_lower(df)
-
     bank = next((c for c in d.columns if c.startswith("bank")), None)
 
-    # Candidate account/ref column names
-    ac_col = None
-    for cand in d.columns:
-        lc = cand.lower()
-        if "a/c" in lc or "ac #" in lc or "a/c #" in lc or lc.strip() in {"a/c#", "a/c #", "a c #"}:
-            ac_col = cand
-            break
-    if ac_col is None:
-        # other common patterns
-        for cand in d.columns:
-            if any(k in cand for k in ["a/c", "a c", "a.c", "account", "a/c no", "ac no", "a/c number"]):
-                ac_col = cand
-                break
-
-    # Date (priority)
+    # date
     date_col = None
     for cand in d.columns:
         if "maturity" in cand and "new" not in cand:
-            date_col = cand
-            break
+            date_col = cand; break
     if date_col is None:
         for cand in d.columns:
             if "new" in cand and "maturity" in cand:
-                date_col = cand
-                break
+                date_col = cand; break
 
-    # Amount (priority)
+    # amount
     amount_col = None
     for cand in d.columns:
         if "balance" in cand and "settlement" in cand:
-            amount_col = cand
-            break
+            amount_col = cand; break
     if amount_col is None:
         for cand in d.columns:
             if "currently" in cand and "due" in cand:
-                amount_col = cand
-                break
+                amount_col = cand; break
     if amount_col is None:
         amount_col = "amount(sar)" if "amount(sar)" in d.columns else ("amount" if "amount" in d.columns else None)
 
@@ -214,22 +189,26 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     type_col   = next((c for c in d.columns if "type" in c), None)
     remark_col = next((c for c in d.columns if "remark" in c), None)
 
+    # optional reference column (A/C # or similar)
+    ref_col = next(
+        (c for c in d.columns if any(k in c for k in ["a/c", "ac#", "a c #", "account"])),
+        None
+    )
+
     if not bank or not amount_col or not date_col:
         return pd.DataFrame()
 
-    out_dict = {
+    out = pd.DataFrame({
         "bank": d[bank].astype(str).str.strip(),
         "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
         "amount": d[amount_col].map(_to_number),
         "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
         "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
         "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
-        "description": ""
-    }
-    if ac_col is not None:
-        out_dict["ac_ref"] = d[ac_col].astype(str).str.strip()
+    })
+    if ref_col:
+        out["ref"] = d[ref_col].astype(str).str.strip()
 
-    out = pd.DataFrame(out_dict)
     out = out.dropna(subset=["bank", "amount", "settlement_date"])
     out = out[out["status"].str.lower() == "pending"].copy()
     return out
@@ -246,9 +225,9 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
     }).dropna()
     return out.sort_values("date")
 
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Header: logo + title + top-right Refresh
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 c_logo, c_title, c_refresh = st.columns([0.08, 0.74, 0.18])
 with c_logo:
     try:
@@ -268,9 +247,9 @@ with c_refresh:
 
 st.markdown("")
 
-# ----------------------------
-# Load Data
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Load & Parse
+# ──────────────────────────────────────────────────────────────────────────────
 notes = []
 try:
     df_bal_raw = read_csv(LINKS["BANK BALANCE"])
@@ -296,7 +275,6 @@ except Exception as e:
     notes.append(f"Fund Movement load error: {e}")
     df_fm_raw = pd.DataFrame()
 
-# Parse
 df_by_bank, bal_date = pd.DataFrame(), None
 if not df_bal_raw.empty:
     try:
@@ -328,17 +306,15 @@ if not df_fm_raw.empty:
 for n in notes:
     st.warning(n)
 
-# ----------------------------
-# KPIs
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# KPIs (clean titles, right-aligned numbers)
+# ──────────────────────────────────────────────────────────────────────────────
 total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
 banks_cnt     = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
+
 today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 next4  = today0 + pd.Timedelta(days=3)
-lc_next4_sum = (
-    df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
-    if not df_lc.empty else 0.0
-)
+lc_next4_sum = df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0
 approved_sum  = df_pay["amount"].sum() if not df_pay.empty else 0.0
 
 k1, k2, k3, k4 = st.columns(4)
@@ -353,23 +329,19 @@ with k4:
 
 st.markdown("---")
 
-# ----------------------------
-# Bank Balances — TABLE (Share% hidden, numeric right-aligned)
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Bank Balances — table (Share% hidden, numeric right-aligned)
+# ──────────────────────────────────────────────────────────────────────────────
 st.subheader("Bank Balances (Table)")
 if df_by_bank.empty:
     st.info("No balances found.")
 else:
-    df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)
-    df_bal_table = df_bal_table[["bank", "balance"]]
-
+    df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)[["bank", "balance"]]
     styled = (
-        df_bal_table
-        .rename(columns={"bank": "Bank", "balance": "Balance"})
-        .style.format({"Balance": "{:,.2f}"})
-        .set_properties(subset=["Balance"], **{"text-align": "right"})
+        df_bal_table.rename(columns={"bank": "Bank", "balance": "Balance"})
+                    .style.format({"Balance": "{:,.2f}"})
+                    .set_properties(subset=["Balance"], **{"text-align": "right"})
     )
-
     st.dataframe(
         styled,
         use_container_width=True,
@@ -377,23 +349,23 @@ else:
         column_config={
             "Bank": st.column_config.TextColumn("Bank", width="medium"),
             "Balance": st.column_config.NumberColumn("Balance", width="large"),
-        }
+        },
     )
 
 st.markdown("---")
 
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Supplier Payments — Approved ONLY
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 st.header("Approved List")
 if df_pay.empty:
     st.info("No Approved payments in sheet.")
 else:
     banks = sorted(df_pay["bank"].dropna().unique())
     pick_banks = st.multiselect("Filter by Bank", banks, default=banks, label_visibility="collapsed")
-
     view = df_pay[df_pay["bank"].isin(pick_banks)].copy()
 
+    # Sum by bank
     grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
     st.markdown("**Sum by Bank**")
     grp_styled = (
@@ -403,30 +375,31 @@ else:
     )
     st.dataframe(grp_styled, use_container_width=True, height=220)
 
+    # Row list
     st.markdown("**Approved List (rows)**")
     show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view.columns]
     v = view[show_cols].rename(columns={
         "bank": "Bank", "supplier": "Supplier", "currency": "Curr", "amount": "Amount", "status": "Status"
     })
-    v_styled = (
-        v.style.format({"Amount": "{:,.2f}"})
-         .set_properties(subset=["Amount"], **{"text-align": "right"})
-    )
+    v_styled = v.style.format({"Amount": "{:,.2f}"}).set_properties(subset=["Amount"], **{"text-align": "right"})
     st.dataframe(v_styled, use_container_width=True, height=360)
 
 st.markdown("---")
 
-# ----------------------------
-# LC Settlements — PENDING ONLY (hide remarks list; include A/C # if available)
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# LC Settlements — Pending ONLY
+#   * No date-range input
+#   * Only the main table (no separate "List")
+#   * Include REF column (A/C #) when available
+# ──────────────────────────────────────────────────────────────────────────────
 st.header("LC Settlements — Pending Only")
-
 if df_lc.empty:
     st.info(
         "No LC (Pending) data. Ensure sheet has Bank, Maturity Date/New Maturity Date, "
         "and any of: Balance for Settlement / Currently Due / Amount(SAR)."
     )
 else:
+    # Use full range (hidden)
     dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
     d1, d2 = pd.to_datetime(dmin), pd.to_datetime(dmax) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
     lc_view = df_lc.loc[df_lc["settlement_date"].between(d1, d2)].copy()
@@ -441,35 +414,33 @@ else:
         viz = lc_view.copy()
         viz["settlement_date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
 
-        # Build display columns (include A/C # if we have it)
-        cols = ["bank", "type", "status", "settlement_date", "amount", "remark", "description"]
-        if "ac_ref" in viz.columns:
-            cols.insert(1, "ac_ref")  # after bank
+        columns = ["bank", "type", "status", "settlement_date", "amount", "remark"]
+        if "ref" in viz.columns:
+            # put reference (A/C #) next to bank for quick mapping
+            viz["ref"] = viz["ref"].replace({"nan": "", "None": ""})
+            columns.insert(1, "ref")
 
-        viz = viz[cols].rename(columns={
+        viz = viz[columns].rename(columns={
             "bank": "Bank",
+            "ref": "A/C #",
             "type": "Type",
             "status": "Status",
             "settlement_date": "Settlement Date",
             "amount": "Amount",
             "remark": "Remark",
-            "description": "Description",
-            "ac_ref": "A/C #"
         })
 
         viz_styled = (
             viz.style.format({"Amount": "{:,.2f}"})
                .set_properties(subset=["Amount"], **{"text-align": "right"})
         )
-        st.dataframe(viz_styled, use_container_width=True, height=360)
-
-    # (Per your instruction) HIDE the extra “List” of remarks.
+        st.dataframe(viz_styled, use_container_width=True, height=380)
 
 st.markdown("---")
 
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Liquidity Trend
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 st.header("Liquidity Trend")
 if df_fm.empty:
     st.info("No Fund Movement data (need Date + Total Liquidity).")
@@ -482,14 +453,14 @@ else:
     except Exception:
         st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Quick Insights
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 st.header("Quick Insights")
 ins = []
 if not df_by_bank.empty:
     top = df_by_bank.sort_values("balance", ascending=False).head(1)
-    if not top.empty:
+    if not top.empty():
         ins.append(f"Top balance: **{top.iloc[0]['bank']}** ({fmt_num(top.iloc[0]['balance'])}).")
 if not df_pay.empty:
     byb = df_pay.groupby("bank")["amount"].sum().sort_values(ascending=False)
@@ -506,9 +477,9 @@ if ins:
 else:
     st.info("Insights will appear once data is available.")
 
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Footer
-# ----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
     "<p style='text-align:center; color:grey;'>Created By <b>Jaseer Pykarathodi</b></p>",
