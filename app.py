@@ -1,6 +1,6 @@
 # Treasury Dashboard — Google Sheets
 # - Supplier Payments: parser fix + Approved-only
-# - Bank Balances: table view (no cards)
+# - Bank Balances: table view (custom widths, right-aligned)
 # - LC Settlements: Pending-only + Remark panel
 # File: app.py
 
@@ -70,6 +70,51 @@ def kpi_card(title, value, subtitle="", bg="#EEF2FF", border="#C7D2FE", text="#1
         unsafe_allow_html=True
     )
 
+# ---- HTML table renderer for Bank Balances (fixed widths, right-aligned) ---
+def render_bank_table_html(df: pd.DataFrame, widths):
+    """Render a compact HTML table with controlled column widths."""
+    # widths is dict: {"Bank":"12%", "Balance":"18%", "Share %":"12%"}
+    df = df.copy()
+    df["Balance"] = df["Balance"].map(fmt_num)
+    df["Share %"] = df["Share %"].map(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+
+    # Build HTML
+    header_html = "".join(
+        f'<th style="width:{widths.get(col, "auto")}; text-align:{"right" if col!="Bank" else "left"}; padding:8px 10px;">{col}</th>'
+        for col in df.columns
+    )
+    rows_html = []
+    for _, r in df.iterrows():
+        row = "".join(
+            f'<td style="text-align:{"right" if c!="Bank" else "left"}; padding:8px 10px;">{r[c]}</td>'
+            for c in df.columns
+        )
+        rows_html.append(f"<tr>{row}</tr>")
+
+    html = f"""
+    <style>
+      .bbank-table {{
+        border-collapse: separate;
+        border-spacing: 0;
+        width: 100%;
+        font-size: 0.95rem;
+      }}
+      .bbank-table thead th {{
+        background: #f7faff;
+        border-bottom: 1px solid #e5e7eb;
+        color: #111827;
+        font-weight: 600;
+      }}
+      .bbank-table tbody tr:nth-child(even) td {{ background: #fbfdff; }}
+      .bbank-table tbody tr:hover td {{ background: #f2f7ff; }}
+    </style>
+    <table class="bbank-table">
+      <thead><tr>{header_html}</tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
 # ---------------------------------------------------------------------------
 # Parsers
 # ---------------------------------------------------------------------------
@@ -120,7 +165,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     """
     Supplier Payments:
       Bank, Supplier Name, Currency, Amount or Amount(SAR), Status
-    Keep ONLY rows where Status contains 'Approved' (case-insensitive).
+    Keep ONLY rows where Status contains 'Approved'.
     """
     d = cols_lower(df).rename(columns={
         "supplier name": "supplier",
@@ -128,18 +173,15 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         "order/sh/branch": "order_branch"
     })
 
-    # Ensure columns exist
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
 
-    # Robust status filtering (fix for Series.strip error)
     status_norm = d["status"].astype(str).str.strip().str.lower()
-    approved_mask = status_norm.str.contains("approved")  # only "Approved"
+    approved_mask = status_norm.str.contains("approved")
     d = d.loc[approved_mask].copy()
     if d.empty:
         return pd.DataFrame()
 
-    # Choose amount column
     amt_col = "amount_sar" if "amount_sar" in d.columns else ("amount" if "amount" in d.columns else None)
     if amt_col is None:
         return pd.DataFrame()
@@ -147,10 +189,8 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     d["amount"] = d[amt_col].map(_to_number)
     d["bank"] = d["bank"].astype(str).str.strip()
 
-    # Keep tidy columns
     keep = [c for c in ["bank","supplier","currency","amount","status"] if c in d.columns]
     out = d[keep].dropna(subset=["amount"]).copy()
-    # Re-title case the status for display
     if "status" in out.columns:
         out["status"] = out["status"].astype(str).str.title()
     return out
@@ -158,26 +198,20 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     """
     LC Settlements (Pending only) with REMARK support.
-    - Date column: prefer 'maturity date', else 'new maturity date'
-    - Amount column priority: 'balance for settlement' > 'currently due' > 'amount(sar)' > 'amount'
-    - Keep only 'status' == 'Pending'
     """
     d = cols_lower(df)
 
-    # Bank
     bank = next((c for c in d.columns if c.startswith("bank")), None)
 
-    # Date (priority)
     date_col = None
     for cand in d.columns:
-        if "maturity" in cand and "new" not in cand:   # 'maturity date'
+        if "maturity" in cand and "new" not in cand:
             date_col = cand; break
     if date_col is None:
         for cand in d.columns:
-            if "new" in cand and "maturity" in cand:  # 'new maturity date'
+            if "new" in cand and "maturity" in cand:
                 date_col = cand; break
 
-    # Amount (priority)
     amount_col = None
     for cand in d.columns:
         if "balance" in cand and "settlement" in cand:
@@ -222,23 +256,17 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("date")
 
 # ---------------------------------------------------------------------------
-# Header & Refresh
+# Header & Top-right Refresh
 # ---------------------------------------------------------------------------
-st.title(f"{COMPANY} — Treasury Dashboard")
-st.caption(pd.Timestamp.now(tz=TZ).strftime("Last refresh: %Y-%m-%d %H:%M:%S %Z"))
-
-st.sidebar.header("Refresh")
-if st.sidebar.button("Refresh now"):
-    st.cache_data.clear()
-    try: st.rerun()
-    except: st.experimental_rerun()
-
-auto = st.sidebar.checkbox("Auto refresh", value=False)
-sec = st.sidebar.number_input("Interval (seconds)", 15, 600, 60, 15)
-if auto:
-    time.sleep(int(sec))
-    try: st.rerun()
-    except: st.experimental_rerun()
+left, right = st.columns([0.86, 0.14])
+with left:
+    st.title(f"{COMPANY} — Treasury Dashboard")
+    st.caption(pd.Timestamp.now(tz=TZ).strftime("Last refresh: %Y-%m-%d %H:%M:%S %Z"))
+with right:
+    st.write("")  # spacer
+    if st.button("🔄 Refresh", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Load
@@ -298,27 +326,35 @@ lc_next4_sum = (
 approved_sum = df_pay["amount"].sum() if not df_pay.empty else 0.0
 
 c1, c2, c3, c4 = st.columns(4)
-# ▼▼ change: removed "As of {bal_date}" subtitle
+# Keep subtitle empty (you asked to remove "As of ...")
 with c1: kpi_card("Total Balance", total_balance, "", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
 with c2: kpi_card("Approved Payments (sum)", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
 with c3: kpi_card("LC due (next 4 days) • Pending", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
 with c4: kpi_card("Banks", banks_cnt, bg="#FFF1F2", border="#FBD5D8", text="#9F1239")
 
 # ---------------------------------------------------------------------------
-# Bank Balances — TABLE VIEW
+# Bank Balances — custom-width HTML table
 # ---------------------------------------------------------------------------
-# ▼▼ change: removed "(Table)" wording
 st.markdown("### Bank Balances")
 if df_by_bank.empty:
     st.info("No balances found.")
 else:
-    df_bal_table = df_by_bank.copy()
-    df_bal_table = df_bal_table.sort_values("balance", ascending=False)
+    df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)
     total = df_bal_table["balance"].sum()
-    df_bal_table["share_%"] = (df_bal_table["balance"] / total * 100).round(2)
-    df_bal_table["balance"] = df_bal_table["balance"].map(fmt_num)
-    st.dataframe(df_bal_table.rename(columns={"bank":"Bank","balance":"Balance","share_%":"Share %"}),
-                 use_container_width=True, height=320)
+    df_bal_table["share_%"] = (df_bal_table["balance"] / total * 100)
+
+    # rename + select
+    df_bal_table = df_bal_table.rename(columns={
+        "bank": "Bank",
+        "balance": "Balance",
+        "share_%": "Share %"
+    })[["Bank", "Balance", "Share %"]]
+
+    # render with fixed widths
+    render_bank_table_html(
+        df_bal_table,
+        widths={"Bank": "12%", "Balance": "18%", "Share %": "12%"}
+    )
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
@@ -349,14 +385,12 @@ else:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# LC Settlements — PENDING ONLY (with REMARKS)
+# LC Settlements — Pending ONLY (with REMARKS)
 # ---------------------------------------------------------------------------
-# ▼▼ change: header text without "— Pending Only"
 st.header("LC Settlements")
 if df_lc.empty:
     st.info("No LC (Pending) data. Ensure sheet has Bank, Maturity Date/New Maturity Date, and any of: Balance for Settlement / Currently Due / Amount(SAR).")
 else:
-    # Filters
     l1, l2, l3 = st.columns([1.2, 1.2, 1])
     with l1:
         banks = sorted(df_lc["bank"].dropna().unique())
@@ -386,7 +420,6 @@ else:
         }).sort_values("Settlement Date"),
         use_container_width=True, height=360)
 
-        # Remarks panel — rows where remark has text
         remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
         if not remarks.empty:
             st.subheader("Remarks")
@@ -436,27 +469,3 @@ if ins:
     for i in ins: st.markdown(f"- {i}")
 else:
     st.info("Insights will appear once data is available.")
-# ================================
-# REFRESH BUTTON (TOP-RIGHT)
-# ================================
-col1, col2 = st.columns([9, 1])  # Adjust ratio so button moves right
-with col2:
-    if st.button("🔄 Refresh", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
-# ================================
-# BANK BALANCE TABLE (CUSTOM WIDTH)
-# ================================
-st.markdown("### 🏦 Bank Balances")
-
-# Adjust column widths with Pandas Styler
-bank_table = bank_df.style.set_table_styles(
-    [
-        {"selector": "th.col0", "props": [("width", "12em")]},   # BANK col
-        {"selector": "th.col1", "props": [("width", "18em")]},   # Balance col
-        {"selector": "th.col2", "props": [("width", "12em")]}    # Share col
-    ]
-)
-
-st.dataframe(bank_table, use_container_width=True)
