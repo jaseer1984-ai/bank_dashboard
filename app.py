@@ -619,15 +619,11 @@ def render_header():
         current_time = datetime.now().strftime("Last refresh: %Y-%m-%d %H:%M:%S")
         st.caption(current_time)
         
-        col1, col2 = st.columns(2)
         with col1:
             if st.button("🔄 Refresh", type="primary", use_container_width=True):
                 st.cache_data.clear()
                 logger.info("Manual refresh triggered")
                 st.rerun()
-        with col2:
-            if st.button("📥 Export", use_container_width=True):
-                st.session_state['show_export'] = True
 
 # ----------------------------
 # Main Application
@@ -794,7 +790,7 @@ def main():
                         " onmouseover="this.style.transform='translateY(-2px)'" 
                            onmouseout="this.style.transform='translateY(0)'">
                             <div style="font-size:13px;color:#6b7280;margin-bottom:8px;font-weight:500;">{row['bank']}</div>
-                            <div style="font-size:28px;font-weight:800;color:#111827;">
+                            <div style="font-size:28px;font-weight:800;color:#111827;text-align:right;direction:ltr;">
                                 {fmt_currency(row['balance'])}
                             </div>
                         </div>
@@ -804,7 +800,16 @@ def main():
         else:
             df_bal_table = df_bal_view[["bank", "balance"]].rename(columns={"bank": "Bank", "balance": "Balance"})
             df_bal_table["Balance"] = df_bal_table["Balance"].map(lambda x: fmt_currency(x))
-            st.dataframe(df_bal_table, use_container_width=True, height=360)
+            
+            # Apply custom styling for right alignment of numbers
+            def style_table(df):
+                return df.style.set_properties(**{
+                    'text-align': 'right'
+                }, subset=['Balance']).set_properties(**{
+                    'text-align': 'left'
+                }, subset=['Bank'])
+            
+            st.dataframe(style_table(df_bal_table), use_container_width=True, height=360)
 
     st.markdown("---")
 
@@ -853,7 +858,16 @@ def main():
                 "amount": "Amount", "status": "Status"
             }).copy()
             v["Amount"] = v["Amount"].map(fmt_currency)
-            st.dataframe(v, use_container_width=True, height=360)
+            
+            # Style the detailed table
+            def style_detailed_table(df):
+                return df.style.set_properties(**{
+                    'text-align': 'right'
+                }, subset=['Amount']).set_properties(**{
+                    'text-align': 'left'
+                }, subset=[col for col in df.columns if col != 'Amount'])
+            
+            st.dataframe(style_detailed_table(v), use_container_width=True, height=360)
         else:
             st.info("No payments match the selected criteria.")
 
