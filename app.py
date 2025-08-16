@@ -1,6 +1,8 @@
-# Treasury Dashboard — Google Sheets ONLY (force-mapped)
-# BANK BALANCE sheet name respected; Supplier Payments -> only Approved
-# Colored bank cards; no currency symbol; auto-convert pubhtml -> csv
+# Treasury Dashboard — Google Sheets ONLY (your gids filled in)
+# - BANK BALANCE sheet name respected
+# - Supplier Payments -> Approved only
+# - Colored bank cards; no currency symbol
+# - Auto-convert to CSV export URLs
 
 import io, time, re
 from datetime import datetime, timedelta
@@ -12,14 +14,14 @@ import streamlit as st
 st.set_page_config(page_title="Treasury Dashboard", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 1) PUT YOUR FOUR GOOGLE "PUBLISH TO WEB" LINKS HERE
-#    (you can paste pubhtml or csv; the app converts pubhtml to csv automatically)
+# YOUR GOOGLE SHEET (same file id, different gids per tab)
 # -----------------------------------------------------------------------------
+FILE_ID = "1371amvaCbejUWVJI_moWdIchy5DF1lPO"
 RAW_LINKS = {
-    "BANK BALANCE": "PASTE_BANK_BALANCE_LINK_HERE",      # e.g. .../pub?gid=XXX&single=true&output=csv  (or pubhtml)
-    "SUPPLIER PAYMENTS": "PASTE_SUPPLIER_PAYMENTS_LINK",  # csv link (or pubhtml)
-    "SETTLEMENTS": "PASTE_SETTLEMENTS_LINK",              # csv link (or pubhtml)
-    "Fund Movement": "PASTE_FUND_MOVEMENT_LINK",          # csv link (or pubhtml)
+    "BANK BALANCE":      f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=860709395",
+    "SUPPLIER PAYMENTS": f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=20805295",
+    "SETTLEMENTS":       f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=978859477",
+    "Fund Movement":     f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=66055663",
 }
 
 COMPANY_NAME = "Issam Kaabani Partners"
@@ -30,19 +32,7 @@ TZ = "Asia/Riyadh"
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-def to_csv_url(u: str) -> str:
-    """Normalize a Google 'publish to web' URL to output CSV."""
-    if not u:
-        return u
-    if "output=csv" in u:
-        return u
-    if u.endswith("pubhtml"):
-        base = u.rsplit("/", 1)[0]
-        return base + "/pub?output=csv"
-    return u + ("&" if "?" in u else "?") + "output=csv"
-
 def fmt_money(v):
-    """Show plain numbers (no currency symbol)."""
     try:
         return f"{float(v):,.2f}"
     except Exception:
@@ -116,28 +106,17 @@ def _cols_lower_strip(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def _to_number(x):
-    """Parse numbers like '10,366,815.65' or '3%' into floats."""
-    if pd.isna(x):
-        return np.nan
+    if pd.isna(x): return np.nan
     s = str(x).strip().replace(",", "")
-    if s.endswith("%"):
-        s = s[:-1]
-    try:
-        return float(s)
-    except Exception:
-        return np.nan
+    if s.endswith("%"): s = s[:-1]
+    try: return float(s)
+    except Exception: return np.nan
 
 # -----------------------------------------------------------------------------
 # Parsers
 # -----------------------------------------------------------------------------
 def parse_bank_balance(df: pd.DataFrame):
-    """
-    BANK BALANCE sheet: like original 'UNT A'
-    - One bank/name text column
-    - One or more date columns in header; we pick the latest
-    """
     df = df.copy().dropna(how="all").dropna(axis=1, how="all")
-    # Find a likely bank/name column
     bank_col = None
     for c in df.columns:
         if df[c].dtype == object and (df[c].dropna().astype(str).str.strip() != "").sum() >= 3:
@@ -145,7 +124,6 @@ def parse_bank_balance(df: pd.DataFrame):
     if bank_col is None:
         raise ValueError('[BANK BALANCE] Could not detect "Bank" column.')
 
-    # Find latest date column
     parsed_dates = pd.to_datetime(pd.Index(df.columns), errors="coerce", dayfirst=False)
     date_cols = [col for col, d in zip(df.columns, parsed_dates) if pd.notna(d)]
     if not date_cols:
@@ -153,7 +131,6 @@ def parse_bank_balance(df: pd.DataFrame):
     date_map = {col: pd.to_datetime(col, errors="coerce", dayfirst=False) for col in date_cols}
     latest_col = max(date_cols, key=lambda c: date_map[c])
 
-    # Clean
     bank_series = df[bank_col].astype(str).str.strip()
     mask = bank_series.ne("") & ~bank_series.str.contains("available|total", case=False, na=False)
     sub = df.loc[mask, [bank_col, latest_col]].copy()
@@ -168,14 +145,13 @@ def parse_bank_balance(df: pd.DataFrame):
     return by_bank, latest_date
 
 def parse_payments(df: pd.DataFrame) -> pd.DataFrame:
-    """Supplier Payments — keep only Approved."""
+    # Supplier Payments — keep only Approved
     d = _cols_lower_strip(df)
     col_bank = next((c for c in d.columns if c.startswith("bank")), None)
-    col_amt = next((c for c in d.columns if re.search(r"^(amount|amount\s*\(sar\)|amount\(sar\)|amt|amt\s*sar)$", c)), None)
+    col_amt  = next((c for c in d.columns if re.search(r"^(amount|amount\s*\(sar\)|amount\(sar\)|amt|amt\s*sar)$", c)), None)
     col_status = next((c for c in d.columns if "status" in c), None)
     col_due = next((c for c in d.columns if "due" in c or "payment date" in c or "expected" in c or "schedule" in c), None)
     col_date = next((c for c in d.columns if c == "date"), None)
-
     if not col_bank or not col_status or not col_amt:
         raise ValueError('[SUPPLIER PAYMENTS] Need Bank, Status, and Amount/Amount(SAR).')
 
@@ -187,22 +163,20 @@ def parse_payments(df: pd.DataFrame) -> pd.DataFrame:
         "due_date": pd.to_datetime(d[col_due], errors="coerce") if col_due else pd.NaT,
         "description": ""
     })
-    # Normalize to Approved/Pending/Rejected then keep only Approved
     s = out["status_raw"].str.lower()
     out["status"] = np.select([s.str.contains("release"), s.str.contains("reject")],
                               ["Approved", "Rejected"], default="Pending")
     out = out.drop(columns=["status_raw"]).dropna(subset=["bank", "amount"])
-    out = out[out["status"] == "Approved"]  # << only Approved
+    out = out[out["status"] == "Approved"]  # only Approved rows
     return out
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     d = _cols_lower_strip(df)
     col_bank = next((c for c in d.columns if c.startswith("bank")), None)
-    col_amt = next((c for c in d.columns if re.search(r"^(amount|amount\s*\(sar\)|amount\(sar\)|amt|amt\s*sar)$", c)), None)
+    col_amt  = next((c for c in d.columns if re.search(r"^(amount|amount\s*\(sar\)|amount\(sar\)|amt|amt\s*sar)$", c)), None)
     col_maturity = next((c for c in d.columns if "new maturity" in c or "maturity date" in c), None)
     col_type = next((c for c in d.columns if "type" in c), None)
     col_status = next((c for c in d.columns if "status" in c), None)
-
     if not col_bank or not col_amt or not col_maturity:
         raise ValueError('[SETTLEMENTS] Need Bank, Amount/Amount(SAR), and (New) Maturity Date.')
 
@@ -217,13 +191,8 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     return out.dropna(subset=["bank", "amount", "settlement_date"])
 
 def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Accepts headers like:
-    'Date', ' Total Liquidity ', 'Change in Liquidity', '% of Change'
-    - Strips spaces/case; parses numbers with commas and %
-    """
-    raw = df.copy()
-    d = _cols_lower_strip(raw)
+    # Accepts 'Date' and a column containing both 'total' and 'liquidity'
+    d = _cols_lower_strip(df)
     col_total = next((c for c in d.columns if ("total" in c and "liquidity" in c)), None)
     col_date = "date" if "date" in d.columns else None
     if not col_date or not col_total:
@@ -258,13 +227,10 @@ st.sidebar.header("Preferences")
 stale_flag_enabled = st.sidebar.checkbox("Highlight non-updated banks on refresh", value=True)
 
 # -----------------------------------------------------------------------------
-# LOAD + PARSE (force-map to the four sections)
+# LOAD + PARSE
 # -----------------------------------------------------------------------------
 dfs_raw, notes = {}, []
-for kind, raw in RAW_LINKS.items():
-    if not raw:
-        continue
-    url = to_csv_url(raw)
+for kind, url in RAW_LINKS.items():
     try:
         dfs_raw[kind] = load_csv(url)
     except Exception as e:
@@ -276,32 +242,23 @@ settlements = pd.DataFrame()
 fund_mv = pd.DataFrame()
 
 if "BANK BALANCE" in dfs_raw:
-    try:
-        by_bank, latest_balance_date = parse_bank_balance(dfs_raw["BANK BALANCE"])
-    except Exception as e:
-        notes.append(f"BANK BALANCE parse: {e}")
+    try: by_bank, latest_balance_date = parse_bank_balance(dfs_raw["BANK BALANCE"])
+    except Exception as e: notes.append(f"BANK BALANCE parse: {e}")
 
 if "SUPPLIER PAYMENTS" in dfs_raw:
-    try:
-        payments = parse_payments(dfs_raw["SUPPLIER PAYMENTS"])  # Already filtered to Approved
-    except Exception as e:
-        notes.append(f"Payments parse: {e}")
+    try: payments = parse_payments(dfs_raw["SUPPLIER PAYMENTS"])
+    except Exception as e: notes.append(f"Payments parse: {e}")
 
 if "SETTLEMENTS" in dfs_raw:
-    try:
-        settlements = parse_settlements(dfs_raw["SETTLEMENTS"])
-    except Exception as e:
-        notes.append(f"Settlements parse: {e}")
+    try: settlements = parse_settlements(dfs_raw["SETTLEMENTS"])
+    except Exception as e: notes.append(f"Settlements parse: {e}")
 
 if "Fund Movement" in dfs_raw:
-    try:
-        fund_mv = parse_fund_movement(dfs_raw["Fund Movement"])
-    except Exception as e:
-        notes.append(f"Fund Movement parse: {e}")
+    try: fund_mv = parse_fund_movement(dfs_raw["Fund Movement"])
+    except Exception as e: notes.append(f"Fund Movement parse: {e}")
 
 if notes:
-    for m in notes:
-        st.warning(m)
+    for m in notes: st.warning(m)
 
 # -----------------------------------------------------------------------------
 # Stale bank detector
@@ -331,7 +288,6 @@ lc_next4 = settlements.loc[
     (settlements["settlement_date"] <= end4.tz_localize(None))
 ] if not settlements.empty else pd.DataFrame()
 lc_next4_sum = lc_next4["amount"].sum() if not lc_next4.empty else 0.0
-# payments already Approved-only
 approved_sum = payments["amount"].sum() if not payments.empty else 0.0
 
 k1, k2, k3, k4 = st.columns(4)
@@ -382,14 +338,12 @@ else:
     mpay = (payments["bank"].astype(str).isin(pay_bank_sel)) & (mdate if isinstance(mdate, pd.Series) else True)
     df_pay = payments.loc[mpay].copy()
 
-    # Summary cards
     s_sum = df_pay["amount"].sum()
     s_cnt = len(df_pay)
     c1, c2 = st.columns(2)
     with c1: colored_card("Approved (sum)", s_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
     with c2: colored_card("Approved (count)", s_cnt, bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
 
-    # Table
     show_cols = [c for c in ["date","bank","amount","due_date","description","status"] if c in df_pay.columns]
     viz = df_pay.copy()
     for c in ["date","due_date"]:
@@ -440,7 +394,6 @@ else:
     show_cols = [c for c in ["bank","type","status","settlement_date","amount","description"] if c in viz.columns]
     st.dataframe(viz[show_cols].sort_values("settlement_date"), use_container_width=True, height=320)
 
-    # Coming 4 days
     st.subheader("Coming 4 Days Settlements")
     start = now_local.tz_localize(None); end = (now_local + pd.Timedelta(days=3)).tz_localize(None)
     upcoming = settlements.loc[settlements["bank"].astype(str).isin(lc_bank_sel) & settlements["settlement_date"].between(start, end)].copy()
@@ -497,4 +450,4 @@ if ins:
 else:
     st.info("Insights will appear after data loads.")
 
-st.caption("Data source: Google Sheets (CSV). Colored bank cards • Approved-only Supplier Payments • No currency symbol • Quick Insights")
+st.caption("Data source: Google Sheets (CSV export). Colored bank cards • Approved-only Supplier Payments • No currency symbol • Quick Insights")
