@@ -1,10 +1,10 @@
 # app.py — Treasury Dashboard (Google Sheets)
 # - Logo in header + top-right Refresh button
-# - KPI numbers right-aligned (no "(sum)" / "• Pending")
+# - Company name: "Issam Kabbani & Partners – Unitech"
+# - KPI numbers right-aligned
 # - Bank balances as table (Share% hidden)
 # - Supplier payments: "Approved List", right-aligned amount
-# - LC Settlements: Pending-only, HIDE "List" table
-#   and SHOW reference column (A/C #) inside the main pending table
+# - LC Settlements: Pending-only, hide remark list, ADD "A/C #" column if available
 # - Liquidity trend
 # - Footer: "Created By Jaseer Pykarathodi"
 
@@ -32,8 +32,8 @@ LINKS = {
     "Fund Movement":     f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=66055663",
 }
 
-COMPANY_NAME = "Issam Kaabani Partners"
-LOGO_PATH = "company_logo.png"          # put your logo file next to app.py
+COMPANY_NAME = "Issam Kabbani & Partners – Unitech"
+LOGO_PATH = "ikk_logo.png"          # save your logo as this file next to app.py
 DATE_FMT = "%Y-%m-%d"
 TZ = "Asia/Riyadh"
 
@@ -162,33 +162,29 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         out["status"] = out["status"].astype(str).str.title()
     return out
 
-def _find_ac_col(cols: list[str]) -> str | None:
-    """
-    Try to find the A/C column (‘A/C #’, ‘ac #’, ‘account’, etc.) in lower-cased headers.
-    """
-    for c in cols:
-        cl = c.lower().strip()
-        norm = cl.replace(" ", "").replace("/", "").replace("\\", "").replace("#", "")
-        if "a" in norm and "c" in norm:
-            # matches strings like "a/c#", "ac#", "a_c", etc.
-            if "ac" in norm:
-                return c
-        if "account" in norm:
-            return c
-    # common explicit possibilities
-    for cand in ["a/c #", "a/c#", "ac #", "ac#", "a/c", "account #", "account#", "a c #"]:
-        if cand in cols:
-            return cand
-    return None
-
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pending-only LC table, includes A/C # if present.
+    """
     d = cols_lower(df)
 
     bank = next((c for c in d.columns if c.startswith("bank")), None)
 
-    # detect A/C column
-    ac_col = _find_ac_col(list(d.columns))
+    # Candidate account/ref column names
+    ac_col = None
+    for cand in d.columns:
+        lc = cand.lower()
+        if "a/c" in lc or "ac #" in lc or "a/c #" in lc or lc.strip() in {"a/c#", "a/c #", "a c #"}:
+            ac_col = cand
+            break
+    if ac_col is None:
+        # other common patterns
+        for cand in d.columns:
+            if any(k in cand for k in ["a/c", "a c", "a.c", "account", "a/c no", "ac no", "a/c number"]):
+                ac_col = cand
+                break
 
+    # Date (priority)
     date_col = None
     for cand in d.columns:
         if "maturity" in cand and "new" not in cand:
@@ -200,6 +196,7 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
                 date_col = cand
                 break
 
+    # Amount (priority)
     amount_col = None
     for cand in d.columns:
         if "balance" in cand and "settlement" in cand:
@@ -220,16 +217,19 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     if not bank or not amount_col or not date_col:
         return pd.DataFrame()
 
-    out = pd.DataFrame({
+    out_dict = {
         "bank": d[bank].astype(str).str.strip(),
         "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
         "amount": d[amount_col].map(_to_number),
         "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
         "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
         "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
-        "description": "",
-        "ac_ref": d[ac_col].astype(str).str.strip() if ac_col and ac_col in d.columns else ""
-    })
+        "description": ""
+    }
+    if ac_col is not None:
+        out_dict["ac_ref"] = d[ac_col].astype(str).str.strip()
+
+    out = pd.DataFrame(out_dict)
     out = out.dropna(subset=["bank", "amount", "settlement_date"])
     out = out[out["status"].str.lower() == "pending"].copy()
     return out
@@ -329,14 +329,12 @@ for n in notes:
     st.warning(n)
 
 # ----------------------------
-# KPIs (no "(sum)" or "• Pending"; values right-aligned)
+# KPIs
 # ----------------------------
 total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
 banks_cnt     = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
-
 today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 next4  = today0 + pd.Timedelta(days=3)
-
 lc_next4_sum = (
     df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
     if not df_lc.empty else 0.0
@@ -419,8 +417,7 @@ else:
 st.markdown("---")
 
 # ----------------------------
-# LC Settlements — PENDING ONLY
-# (Hides the old "List" table; shows A/C # reference in the main table)
+# LC Settlements — PENDING ONLY (hide remarks list; include A/C # if available)
 # ----------------------------
 st.header("LC Settlements — Pending Only")
 
@@ -432,7 +429,6 @@ if df_lc.empty:
 else:
     dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
     d1, d2 = pd.to_datetime(dmin), pd.to_datetime(dmax) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-
     lc_view = df_lc.loc[df_lc["settlement_date"].between(d1, d2)].copy()
 
     cc1, cc2 = st.columns(2)
@@ -444,7 +440,13 @@ else:
     if not lc_view.empty:
         viz = lc_view.copy()
         viz["settlement_date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
-        viz = viz.rename(columns={
+
+        # Build display columns (include A/C # if we have it)
+        cols = ["bank", "type", "status", "settlement_date", "amount", "remark", "description"]
+        if "ac_ref" in viz.columns:
+            cols.insert(1, "ac_ref")  # after bank
+
+        viz = viz[cols].rename(columns={
             "bank": "Bank",
             "type": "Type",
             "status": "Status",
@@ -454,16 +456,14 @@ else:
             "description": "Description",
             "ac_ref": "A/C #"
         })
-        # Order includes A/C # column inside the main table
-        order_cols = [c for c in ["A/C #", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"] if c in viz.columns]
+
         viz_styled = (
-            viz[order_cols]
-            .style.format({"Amount": "{:,.2f}"})
-            .set_properties(subset=["Amount"], **{"text-align": "right"})
+            viz.style.format({"Amount": "{:,.2f}"})
+               .set_properties(subset=["Amount"], **{"text-align": "right"})
         )
         st.dataframe(viz_styled, use_container_width=True, height=360)
 
-    # NOTE: The separate "List" (remarks) table is intentionally hidden as requested.
+    # (Per your instruction) HIDE the extra “List” of remarks.
 
 st.markdown("---")
 
