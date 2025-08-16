@@ -158,7 +158,7 @@ def simple_kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"
             <div style="font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em">
                 {title}
             </div>
-            <div style="font-size:28px;font-weight:800;color:{text};margin-top:4px;text-align:right;">
+            <div style="font-size:28px;font-weight:800;color:{text};margin-top:4px;text-align:right;direction:ltr;">
                 {display_value}
             </div>
         </div>
