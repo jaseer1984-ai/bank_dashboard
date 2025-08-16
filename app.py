@@ -1,7 +1,9 @@
 # app.py — Treasury Dashboard (exact amounts on cards, no SAR, no 'Only')
 # - Bank Balances: cards show exact numbers (no K/M, no decimals), SAR removed
-# - "Only" removed from LC header ("Pending" instead of "Pending Only")
-# - Includes: header (logo + refresh), KPIs, cards/table toggle, supplier (Approved), LC Pending (+ optional reference), liquidity trend, insights, footer
+# - 'Only' removed from LC header ('Pending' instead of 'Pending Only')
+# - LC section made robust against missing columns (no KeyError)
+# - Liquidity quick insight restored
+# - Everything else unchanged
 
 import io
 import time
@@ -58,14 +60,13 @@ def cols_lower(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def fmt_full_int(v):
-    """Exact integer string with thousands separators, no decimals, no rounding suffixes."""
+    """Exact integer with thousands separators (no decimals, no K/M, no currency symbol)."""
     try:
         return f"{float(v):,.0f}"
     except Exception:
         return str(v)
 
 def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
-    # KPI value right-aligned; keep existing behavior
     st.markdown(
         f"""
         <div style="
@@ -85,13 +86,7 @@ def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
 # Parsers
 # ----------------------------
 def parse_bank_balance(df: pd.DataFrame):
-    """
-    A) If columns 'Bank' and ('Amount' or 'Amount(SAR)') exist -> sum by bank.
-    B) Otherwise, bank name column + date headers -> pick latest date column.
-    """
     c = cols_lower(df)
-
-    # Case A
     if "bank" in c.columns and ("amount" in c.columns or "amount(sar)" in c.columns):
         amt_col = "amount" if "amount" in c.columns else "amount(sar)"
         out = pd.DataFrame({
@@ -102,9 +97,7 @@ def parse_bank_balance(df: pd.DataFrame):
         by_bank = out.groupby("bank", as_index=False)["balance"].sum()
         return by_bank, latest_date
 
-    # Case B
     raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
-
     bank_col = None
     for col in raw.columns:
         if raw[col].dtype == object and (raw[col].dropna().astype(str).str.strip() != "").sum() >= 3:
@@ -138,21 +131,17 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     })
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
-
     status_norm = d["status"].astype(str).str.strip().str.lower()
     approved_mask = status_norm.str.contains("approved")
     d = d.loc[approved_mask].copy()
     if d.empty:
         return pd.DataFrame()
-
     amt_col = "amount_sar" if "amount_sar" in d.columns else ("amount" if "amount" in d.columns else None)
     if amt_col is None:
         return pd.DataFrame()
-
     d["amount"] = d[amt_col].map(_to_number)
     d["bank"] = d["bank"].astype(str).str.strip()
-
-    keep = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in d.columns]
+    keep = [c for c in ["bank","supplier","currency","amount","status"] if c in d.columns]
     out = d[keep].dropna(subset=["amount"]).copy()
     if "status" in out.columns:
         out["status"] = out["status"].astype(str).str.title()
@@ -160,33 +149,26 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     d = cols_lower(df)
-
-    # Possible reference column (e.g., "A/C #", "ref", "account")
     ref_col = next((c for c in d.columns if "a/c" in c or "ref" in c or "account" in c), None)
-
     bank = next((c for c in d.columns if c.startswith("bank")), None)
 
     date_col = None
     for cand in d.columns:
         if "maturity" in cand and "new" not in cand:
-            date_col = cand
-            break
+            date_col = cand; break
     if date_col is None:
         for cand in d.columns:
             if "new" in cand and "maturity" in cand:
-                date_col = cand
-                break
+                date_col = cand; break
 
     amount_col = None
     for cand in d.columns:
         if "balance" in cand and "settlement" in cand:
-            amount_col = cand
-            break
+            amount_col = cand; break
     if amount_col is None:
         for cand in d.columns:
             if "currently" in cand and "due" in cand:
-                amount_col = cand
-                break
+                amount_col = cand; break
     if amount_col is None:
         amount_col = "amount(sar)" if "amount(sar)" in d.columns else ("amount" if "amount" in d.columns else None)
 
@@ -207,7 +189,7 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
         "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
         "description": ""
     })
-    out = out.dropna(subset=["bank", "amount", "settlement_date"])
+    out = out.dropna(subset=["bank","amount","settlement_date"])
     out = out[out["status"].str.lower() == "pending"].copy()
     return out
 
@@ -231,7 +213,7 @@ with c_logo:
     try:
         st.image(LOGO_PATH, width=44)
     except Exception:
-        st.write("")  # no logo available
+        st.write("")
 with c_title:
     st.markdown(
         f"<h2 style='margin:0;padding-top:6px;display:flex;align-items:center;'>{COMPANY_NAME} — Treasury Dashboard</h2>",
@@ -252,26 +234,22 @@ notes = []
 try:
     df_bal_raw = read_csv(LINKS["BANK BALANCE"])
 except Exception as e:
-    notes.append(f"BANK BALANCE load error: {e}")
-    df_bal_raw = pd.DataFrame()
+    notes.append(f"BANK BALANCE load error: {e}"); df_bal_raw = pd.DataFrame()
 
 try:
     df_pay_raw = read_csv(LINKS["SUPPLIER PAYMENTS"])
 except Exception as e:
-    notes.append(f"SUPPLIER PAYMENTS load error: {e}")
-    df_pay_raw = pd.DataFrame()
+    notes.append(f"SUPPLIER PAYMENTS load error: {e}"); df_pay_raw = pd.DataFrame()
 
 try:
     df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
 except Exception as e:
-    notes.append(f"SETTLEMENTS load error: {e}")
-    df_lc_raw = pd.DataFrame()
+    notes.append(f"SETTLEMENTS load error: {e}"); df_lc_raw = pd.DataFrame()
 
 try:
     df_fm_raw = read_csv(LINKS["Fund Movement"])
 except Exception as e:
-    notes.append(f"Fund Movement load error: {e}")
-    df_fm_raw = pd.DataFrame()
+    notes.append(f"Fund Movement load error: {e}"); df_fm_raw = pd.DataFrame()
 
 # Parse
 df_by_bank, bal_date = pd.DataFrame(), None
@@ -349,7 +327,6 @@ else:
     df_bal_view = df_by_bank.copy().sort_values("balance", ascending=False)
 
     if view == "Cards":
-        # 4 columns grid of cards, exact amounts, no SAR, no decimals
         cols = st.columns(4)
         for i, row in df_bal_view.iterrows():
             with cols[int(i) % 4]:
@@ -406,7 +383,7 @@ else:
 st.markdown("---")
 
 # ----------------------------
-# LC Settlements — PENDING (reference column shown when available)
+# LC Settlements — PENDING (robust columns)
 # ----------------------------
 st.header("LC Settlements — Pending")
 if df_lc.empty:
@@ -430,35 +407,33 @@ else:
         viz = lc_view.copy()
         viz["Settlement Date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
         viz["Amount"] = viz["amount"].map(fmt_full_int)
+        # Rename once for consistent labels
+        viz = viz.rename(columns={
+            "reference": "Reference",
+            "bank": "Bank",
+            "type": "Type",
+            "status": "Status",
+            "remark": "Remark",
+            "description": "Description"
+        })
 
-        # Show reference when available
-        display_cols = []
-        if "reference" in viz.columns and viz["reference"].astype(str).str.strip().any():
-            display_cols = ["reference", "bank", "type", "status", "Settlement Date", "Amount", "remark", "description"]
-            viz = viz.rename(columns={
-                "reference": "Reference", "bank":"Bank","type":"Type","status":"Status",
-                "remark":"Remark","description":"Description"
-            })
-        else:
-            display_cols = ["bank","type","status","Settlement Date","Amount","remark","description"]
-            viz = viz.rename(columns={
-                "bank":"Bank","type":"Type","status":"Status","remark":"Remark","description":"Description"
-            })
+        # Target columns, but include only those that actually exist
+        preferred_cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]
+        display_cols = [c for c in preferred_cols if c in viz.columns]
 
-        st.dataframe(viz[display_cols].sort_values("Settlement Date"), use_container_width=True, height=360)
+        # Sort only if the sort column exists
+        df_show = viz[display_cols]
+        if "Settlement Date" in df_show.columns:
+            df_show = df_show.sort_values("Settlement Date")
 
-        remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
-        if not remarks.empty:
-            st.subheader("List")
-            r2 = (
-                remarks.assign(
-                    settlement_date=remarks["settlement_date"].dt.strftime(DATE_FMT),
-                    amount=remarks["amount"].map(fmt_full_int)
-                )
-                .rename(columns={"settlement_date":"Settlement Date","bank":"Bank","amount":"Amount","remark":"Remark"})
-                [["Settlement Date","Bank","Amount","Remark"]]
-            )
-            st.dataframe(r2, use_container_width=True, height=220)
+        st.dataframe(df_show, use_container_width=True, height=360)
+
+        # Remarks list (if any)
+        if "Remark" in viz.columns:
+            remarks = viz.loc[viz["Remark"].astype(str).str.strip() != "", ["Settlement Date","Bank","Amount","Remark"]]
+            if not remarks.empty:
+                st.subheader("List")
+                st.dataframe(remarks, use_container_width=True, height=220)
 
 st.markdown("---")
 
@@ -495,6 +470,9 @@ if not df_lc.empty:
     next4 = today0 + pd.Timedelta(days=3)
     next4_sum = df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
     ins.append(f"Pending LC due in next 4 days: **{fmt_full_int(next4_sum)}**.")
+if not df_fm.empty:
+    last_liq = df_fm.iloc[-1]["total_liquidity"]
+    ins.append(f"Latest total liquidity: **{fmt_full_int(last_liq)}**.")
 if ins:
     for i in ins:
         st.markdown(f"- {i}")
