@@ -1,6 +1,6 @@
-# app.py — Enhanced Treasury Dashboard
+# app.py — Enhanced Treasury Dashboard with Table Alternatives
 # Major improvements: Better error handling, configuration management, performance optimization,
-# data validation, security enhancements, and new features
+# data validation, security enhancements, modern UI alternatives, and new features
 
 import io
 import time
@@ -78,6 +78,54 @@ st.markdown("""
     .status-healthy { background-color: #10b981; }
     .status-warning { background-color: #f59e0b; }
     .status-error { background-color: #ef4444; }
+    
+    /* Table Alternatives Styling */
+    .list-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid #e2e8f0;
+        transition: background 0.2s;
+        margin: 0;
+    }
+    .list-item:hover {
+        background-color: #f8fafc;
+    }
+    .list-item:last-child {
+        border-bottom: none;
+    }
+    .list-bank {
+        font-weight: 600;
+        color: #1e293b;
+    }
+    .list-amount {
+        font-weight: 700;
+        color: #059669;
+    }
+    
+    .progress-item {
+        margin-bottom: 16px;
+    }
+    .progress-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        font-size: 14px;
+    }
+    .progress-bar {
+        width: 100%;
+        height: 8px;
+        background: #e2e8f0;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #3b82f6 0%, #06b6d4 100%);
+        border-radius: 4px;
+        transition: width 0.3s ease;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -288,43 +336,108 @@ def fmt_currency_aligned(v, currency="SAR") -> str:
     except (ValueError, TypeError):
         return str(v)
 
-def get_simple_freshness_text(last_update: Optional[datetime]) -> str:
-    """Return simple text for data freshness (no HTML)"""
-    if not last_update:
-        return "No update info"
-    
-    now = datetime.now()
-    hours_old = (now - last_update).total_seconds() / 3600
-    
-    if hours_old < 1:
-        return f"Updated {int(hours_old * 60)} min ago"
-    elif hours_old < 24:
-        return f"Updated {int(hours_old)} hours ago"
-    else:
-        return f"Updated {int(hours_old / 24)} days ago"
+# ----------------------------
+# Table Alternative Display Functions
+# ----------------------------
+def display_as_list(df, bank_col="bank", amount_col="balance", title="Bank Balances"):
+    """Display data as a clean list"""
+    st.markdown(f"**{title}**")
+    for _, row in df.iterrows():
+        st.markdown(
+            f"""
+            <div class="list-item">
+                <span class="list-bank">{row[bank_col]}</span>
+                <span class="list-amount">{fmt_currency(row[amount_col])}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-def get_data_freshness_indicator(last_update: Optional[datetime]) -> str:
-    """Return HTML for data freshness indicator"""
-    if not last_update:
-        return '<span class="status-indicator status-error"></span>No update info'
+def display_as_mini_cards(df, bank_col="bank", amount_col="balance"):
+    """Display data as mini card grid"""
+    cols = st.columns(3)
+    for i, row in df.iterrows():
+        with cols[int(i) % 3]:
+            st.markdown(
+                f"""
+                <div style="
+                    background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+                    padding: 16px;
+                    border-radius: 12px;
+                    border-left: 4px solid #0284c7;
+                    margin-bottom: 12px;
+                ">
+                    <div style="font-size: 12px; color: #0f172a; font-weight: 600; margin-bottom: 8px;">
+                        {row[bank_col]}
+                    </div>
+                    <div style="font-size: 18px; font-weight: 800; color: #0f172a; text-align: right;">
+                        {fmt_currency(row[amount_col])}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+def display_as_progress_bars(df, bank_col="bank", amount_col="balance"):
+    """Display data as progress bars showing relative amounts"""
+    max_amount = df[amount_col].max()
     
-    now = datetime.now()
-    hours_old = (now - last_update).total_seconds() / 3600
-    
-    if hours_old < 1:
-        status = "status-healthy"
-        text = f"Updated {int(hours_old * 60)} min ago"
-    elif hours_old < 24:
-        status = "status-warning" if hours_old > 6 else "status-healthy"
-        text = f"Updated {int(hours_old)} hours ago"
-    else:
-        status = "status-error"
-        text = f"Updated {int(hours_old / 24)} days ago"
-    
-    return f'<span class="status-indicator {status}"></span>{text}'
+    for _, row in df.iterrows():
+        percentage = (row[amount_col] / max_amount) * 100 if max_amount > 0 else 0
+        
+        st.markdown(
+            f"""
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span><strong>{row[bank_col]}</strong></span>
+                    <span><strong>{fmt_currency(row[amount_col])}</strong></span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {percentage}%;"></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+def display_as_metrics(df, bank_col="bank", amount_col="balance"):
+    """Display data as metric boxes"""
+    cols = st.columns(min(4, len(df)))
+    for i, row in df.iterrows():
+        if i < 4:  # Limit to 4 metrics per row
+            with cols[i]:
+                # Format amount in K/M for metric display
+                amount = row[amount_col]
+                if amount >= 1000000:
+                    display_amount = f"{amount/1000000:.1f}M"
+                elif amount >= 1000:
+                    display_amount = f"{amount/1000:.0f}K"
+                else:
+                    display_amount = f"{amount:.0f}"
+                
+                st.markdown(
+                    f"""
+                    <div style="
+                        text-align: center;
+                        padding: 20px;
+                        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+                        border-radius: 12px;
+                        border: 2px solid #f59e0b;
+                        margin-bottom: 12px;
+                    ">
+                        <div style="font-size: 12px; color: #92400e; font-weight: 600; margin-bottom: 8px;">
+                            {row[bank_col]}
+                        </div>
+                        <div style="font-size: 20px; font-weight: 800; color: #92400e;">
+                            {display_amount}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
 # ----------------------------
-# Enhanced Parser Functions
+# Parser Functions (same as before)
 # ----------------------------
 def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetime]]:
     """Enhanced bank balance parser with better error handling"""
@@ -549,30 +662,6 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ----------------------------
-# Data Export Function
-# ----------------------------
-def export_data_to_excel(df_bank, df_payments, df_settlements, df_liquidity):
-    """Export all data to Excel file"""
-    try:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            if not df_bank.empty:
-                df_bank.to_excel(writer, sheet_name='Bank_Balances', index=False)
-            if not df_payments.empty:
-                df_payments.to_excel(writer, sheet_name='Supplier_Payments', index=False)
-            if not df_settlements.empty:
-                df_settlements.to_excel(writer, sheet_name='LC_Settlements', index=False)
-            if not df_liquidity.empty:
-                df_liquidity.to_excel(writer, sheet_name='Liquidity_Trend', index=False)
-        
-        output.seek(0)
-        return output.getvalue()
-    except Exception as e:
-        logger.error(f"Excel export error: {e}")
-        st.error(f"❌ Export failed: {str(e)}")
-        return None
-
-# ----------------------------
 # Header Section
 # ----------------------------
 def render_header():
@@ -607,10 +696,6 @@ def main():
     """Main application function"""
     render_header()
     st.markdown("")
-    
-    # Initialize session state
-    if 'show_export' not in st.session_state:
-        st.session_state['show_export'] = False
     
     # Load and parse data with enhanced error handling
     data_status = {}
@@ -736,14 +821,14 @@ def main():
     
     st.markdown("---")
     
-    # Bank Balance Section
+    # Bank Balance Section with Multiple View Options
     st.header("🏦 Bank Balance")
 
     if df_by_bank.empty:
         st.info("No balances found.")
     else:
         view = st.radio("",
-                        options=["Cards", "Table"],
+                        options=["Cards", "List", "Mini Cards", "Progress Bars", "Metrics", "Table"],
                         index=0,
                         horizontal=True,
                         label_visibility="collapsed")
@@ -799,7 +884,20 @@ def main():
                             """,
                             unsafe_allow_html=True
                         )
-        else:
+        
+        elif view == "List":
+            display_as_list(df_bal_view, "bank", "balance", "Bank Balances")
+        
+        elif view == "Mini Cards":
+            display_as_mini_cards(df_bal_view, "bank", "balance")
+        
+        elif view == "Progress Bars":
+            display_as_progress_bars(df_bal_view, "bank", "balance")
+        
+        elif view == "Metrics":
+            display_as_metrics(df_bal_view, "bank", "balance")
+        
+        else:  # Table view
             df_bal_table = df_bal_view[["bank", "balance"]].rename(columns={"bank": "Bank", "balance": "Balance"})
             # Use right-aligned currency formatting
             df_bal_table["Balance"] = df_bal_table["Balance"].map(lambda x: f"{fmt_currency(x):>20}")
@@ -813,7 +911,7 @@ def main():
 
     st.markdown("---")
 
-    # Supplier Payments Section
+    # Supplier Payments Section with Multiple View Options
     st.header("💰 Approved Payments")
     if df_pay.empty:
         st.info("No approved payments found.")
@@ -827,38 +925,63 @@ def main():
             min_amount = st.number_input("Minimum Amount", min_value=0, value=0)
 
         # Apply filters
-        view = df_pay[
+        view_data = df_pay[
             (df_pay["bank"].isin(pick_banks)) & 
             (df_pay["amount"] >= min_amount)
         ].copy()
 
-        if not view.empty:
-            # Summary metrics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Amount", fmt_currency(view["amount"].sum()))
-            with col2:
-                st.metric("Number of Payments", len(view))
-            with col3:
-                st.metric("Average Payment", fmt_currency(view["amount"].mean()))
-
-            # Bank-wise breakdown
-            grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
-            st.markdown("**📊 Summary by Bank**")
-            grp2 = grp.rename(columns={"bank": "Bank", "amount": "Amount"}).copy()
-            grp2["Amount"] = grp2["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
+        if not view_data.empty:
+            # View selector for supplier payments
+            payment_view = st.radio("Display as:",
+                                   options=["Summary + Table", "Mini Cards", "List", "Progress Bars"],
+                                   index=0,
+                                   horizontal=True,
+                                   key="payment_view")
             
-            st.dataframe(grp2, use_container_width=True, height=220, hide_index=True)
+            if payment_view == "Summary + Table":
+                # Summary metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Amount", fmt_currency(view_data["amount"].sum()))
+                with col2:
+                    st.metric("Number of Payments", len(view_data))
+                with col3:
+                    st.metric("Average Payment", fmt_currency(view_data["amount"].mean()))
 
-            st.markdown("**📋 Detailed Payment List**")
-            show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view.columns]
-            v = view[show_cols].rename(columns={
-                "bank": "Bank", "supplier": "Supplier", "currency": "Currency", 
-                "amount": "Amount", "status": "Status"
-            }).copy()
-            v["Amount"] = v["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
+                # Bank-wise breakdown
+                grp = view_data.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
+                st.markdown("**📊 Summary by Bank**")
+                grp2 = grp.rename(columns={"bank": "Bank", "amount": "Amount"}).copy()
+                grp2["Amount"] = grp2["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
+                
+                st.dataframe(grp2, use_container_width=True, height=220, hide_index=True)
+
+                st.markdown("**📋 Detailed Payment List**")
+                show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view_data.columns]
+                v = view_data[show_cols].rename(columns={
+                    "bank": "Bank", "supplier": "Supplier", "currency": "Currency", 
+                    "amount": "Amount", "status": "Status"
+                }).copy()
+                v["Amount"] = v["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
+                
+                st.dataframe(v, use_container_width=True, height=360, hide_index=True)
             
-            st.dataframe(v, use_container_width=True, height=360, hide_index=True)
+            elif payment_view == "Mini Cards":
+                # Group by bank for mini cards
+                bank_totals = view_data.groupby("bank")["amount"].sum().reset_index()
+                bank_totals.columns = ["bank", "balance"]  # Rename for consistency with display function
+                display_as_mini_cards(bank_totals, "bank", "balance")
+            
+            elif payment_view == "List":
+                bank_totals = view_data.groupby("bank")["amount"].sum().reset_index()
+                bank_totals.columns = ["bank", "balance"]
+                display_as_list(bank_totals, "bank", "balance", "Approved Payments by Bank")
+            
+            elif payment_view == "Progress Bars":
+                bank_totals = view_data.groupby("bank")["amount"].sum().reset_index()
+                bank_totals.columns = ["bank", "balance"]
+                display_as_progress_bars(bank_totals, "bank", "balance")
+                
         else:
             st.info("No payments match the selected criteria.")
 
@@ -886,80 +1009,118 @@ def main():
         ].copy()
 
         if not lc_view.empty:
-            # Summary metrics
-            cc1, cc2, cc3 = st.columns(3)
-            with cc1:
-                simple_kpi_card("Total LC Amount", lc_view["amount"].sum(), "#FFF7E6", "#FDE9C8", "#92400E")
-            with cc2:
-                simple_kpi_card("Number of LCs", len(lc_view), "#E6F0FF", "#C7D8FE", "#1E3A8A")
-            with cc3:
-                urgent_count = len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)])
-                simple_kpi_card("Urgent (2 days)", urgent_count, "#FEE2E2", "#FECACA", "#991B1B")
-
-            # LC Table with enhanced formatting
-            viz = lc_view.copy()
-            viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
-            viz["Amount"] = viz["amount"].map(fmt_currency)
-            viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
-
-            # Rename columns for display, but only if they exist
-            rename_dict = {
-                "reference": "Reference",
-                "bank": "Bank", 
-                "type": "Type",
-                "status": "Status",
-                "remark": "Remark",
-                "description": "Description"
-            }
+            # LC View selector
+            lc_display = st.radio("Display as:",
+                                options=["Summary + Table", "Progress by Urgency", "Mini Cards"],
+                                index=0,
+                                horizontal=True,
+                                key="lc_view")
             
-            # Only rename columns that actually exist
-            existing_renames = {k: v for k, v in rename_dict.items() if k in viz.columns}
-            viz = viz.rename(columns=existing_renames)
+            if lc_display == "Summary + Table":
+                # Summary metrics
+                cc1, cc2, cc3 = st.columns(3)
+                with cc1:
+                    simple_kpi_card("Total LC Amount", lc_view["amount"].sum(), "#FFF7E6", "#FDE9C8", "#92400E")
+                with cc2:
+                    simple_kpi_card("Number of LCs", len(lc_view), "#E6F0FF", "#C7D8FE", "#1E3A8A")
+                with cc3:
+                    urgent_count = len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)])
+                    simple_kpi_card("Urgent (2 days)", urgent_count, "#FEE2E2", "#FECACA", "#991B1B")
 
-            # Color coding for urgency
-            def highlight_urgent(row):
-                if "Days Until Due" in row and row["Days Until Due"] <= 2:
-                    return ['background-color: #fee2e2'] * len(row)
-                elif "Days Until Due" in row and row["Days Until Due"] <= 7:
-                    return ['background-color: #fef3c7'] * len(row)
-                else:
-                    return [''] * len(row)
+                # LC Table with enhanced formatting
+                viz = lc_view.copy()
+                viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
+                viz["Amount"] = viz["amount"].map(fmt_currency)
+                viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
 
-            # Build display columns list more carefully
-            potential_cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", 
-                            "Amount", "Days Until Due", "Remark", "Description"]
-            display_cols = [c for c in potential_cols if c in viz.columns]
-            
-            df_show = viz[display_cols]
-            
-            # Safe sorting - only sort if the column exists
-            if "Settlement Date" in df_show.columns:
-                df_show = df_show.sort_values("Settlement Date")
-            elif "settlement_date" in viz.columns:
-                # If we still have the original column, sort by that and then select display columns
-                viz_sorted = viz.sort_values("settlement_date")
-                df_show = viz_sorted[display_cols]
-            
-            st.dataframe(
-                df_show.style.apply(highlight_urgent, axis=1),
-                use_container_width=True, 
-                height=400
-            )
+                # Rename columns for display, but only if they exist
+                rename_dict = {
+                    "reference": "Reference",
+                    "bank": "Bank", 
+                    "type": "Type",
+                    "status": "Status",
+                    "remark": "Remark",
+                    "description": "Description"
+                }
+                
+                # Only rename columns that actually exist
+                existing_renames = {k: v for k, v in rename_dict.items() if k in viz.columns}
+                viz = viz.rename(columns=existing_renames)
 
-            # Upcoming deadlines alert
+                # Color coding for urgency
+                def highlight_urgent(row):
+                    if "Days Until Due" in row and row["Days Until Due"] <= 2:
+                        return ['background-color: #fee2e2'] * len(row)
+                    elif "Days Until Due" in row and row["Days Until Due"] <= 7:
+                        return ['background-color: #fef3c7'] * len(row)
+                    else:
+                        return [''] * len(row)
+
+                # Build display columns list more carefully
+                potential_cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", 
+                                "Amount", "Days Until Due", "Remark", "Description"]
+                display_cols = [c for c in potential_cols if c in viz.columns]
+                
+                df_show = viz[display_cols]
+                
+                # Safe sorting - only sort if the column exists
+                if "Settlement Date" in df_show.columns:
+                    df_show = df_show.sort_values("Settlement Date")
+                elif "settlement_date" in viz.columns:
+                    # If we still have the original column, sort by that and then select display columns
+                    viz_sorted = viz.sort_values("settlement_date")
+                    df_show = viz_sorted[display_cols]
+                
+                st.dataframe(
+                    df_show.style.apply(highlight_urgent, axis=1),
+                    use_container_width=True, 
+                    height=400
+                )
+            
+            elif lc_display == "Progress by Urgency":
+                # Group by urgency levels
+                lc_temp = lc_view.copy()
+                lc_temp["days_until_due"] = (lc_temp["settlement_date"] - today0).dt.days
+                
+                # Create urgency categories
+                urgent = lc_temp[lc_temp["days_until_due"] <= 2]
+                warning = lc_temp[(lc_temp["days_until_due"] > 2) & (lc_temp["days_until_due"] <= 7)]
+                normal = lc_temp[lc_temp["days_until_due"] > 7]
+                
+                st.markdown("**📊 LC Settlements by Urgency**")
+                
+                # Display as progress bars grouped by urgency
+                if not urgent.empty:
+                    st.markdown("**🚨 Urgent (≤2 days)**")
+                    urgent_grouped = urgent.groupby("bank")["amount"].sum().reset_index()
+                    urgent_grouped.columns = ["bank", "balance"]
+                    display_as_progress_bars(urgent_grouped, "bank", "balance")
+                
+                if not warning.empty:
+                    st.markdown("**⚠️ Warning (3-7 days)**")
+                    warning_grouped = warning.groupby("bank")["amount"].sum().reset_index()
+                    warning_grouped.columns = ["bank", "balance"]
+                    display_as_progress_bars(warning_grouped, "bank", "balance")
+                
+                if not normal.empty:
+                    st.markdown("**✅ Normal (>7 days)**")
+                    normal_grouped = normal.groupby("bank")["amount"].sum().reset_index()
+                    normal_grouped.columns = ["bank", "balance"]
+                    display_as_progress_bars(normal_grouped, "bank", "balance")
+            
+            elif lc_display == "Mini Cards":
+                # Group by bank for mini cards
+                lc_grouped = lc_view.groupby("bank")["amount"].sum().reset_index()
+                lc_grouped.columns = ["bank", "balance"]
+                display_as_mini_cards(lc_grouped, "bank", "balance")
+
+            # Upcoming deadlines alert (always show)
             urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
             if not urgent_lcs.empty:
                 st.warning(f"⚠️ {len(urgent_lcs)} LC(s) due within 3 days!")
                 for _, lc in urgent_lcs.iterrows():
                     days_left = (lc["settlement_date"] - today0).days
                     st.write(f"• {lc['bank']} - {fmt_currency(lc['amount'])} - {days_left} day(s) left")
-
-            # Remarks list (if any)
-            if "Remark" in viz.columns:
-                remarks = viz.loc[viz["Remark"].astype(str).str.strip() != "", ["Settlement Date","Bank","Amount","Remark"]]
-                if not remarks.empty:
-                    st.subheader("List")
-                    st.dataframe(remarks, use_container_width=True, height=220)
 
     st.markdown("---")
 
