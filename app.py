@@ -287,13 +287,6 @@ def fmt_currency_aligned(v, currency="SAR") -> str:
         return f"{'':>20}{formatted}"  # Right-pad with spaces
     except (ValueError, TypeError):
         return str(v)
-    """Format number as currency"""
-    try:
-        if pd.isna(v):
-            return "N/A"
-        return f"{currency} {float(v):,.0f}"
-    except (ValueError, TypeError):
-        return str(v)
 
 def get_simple_freshness_text(last_update: Optional[datetime]) -> str:
     """Return simple text for data freshness (no HTML)"""
@@ -329,41 +322,6 @@ def get_data_freshness_indicator(last_update: Optional[datetime]) -> str:
         text = f"Updated {int(hours_old / 24)} days ago"
     
     return f'<span class="status-indicator {status}"></span>{text}'
-
-def enhanced_kpi_card(title: str, value: Any, subtitle: str = "", 
-                     bg: str = "#EEF2FF", border: str = "#C7D2FE", 
-                     text: str = "#111827", trend: Optional[str] = None):
-    """Enhanced KPI card with trend indicators and data freshness"""
-    formatted_value = fmt_full_int(value) if isinstance(value, (int, float, np.integer, np.floating)) else str(value)
-    
-    trend_html = ""
-    if trend:
-        trend_color = "#10b981" if trend.startswith("+") else "#ef4444" if trend.startswith("-") else "#6b7280"
-        trend_html = f'<div style="font-size:11px;color:{trend_color};margin-top:2px;">{trend}</div>'
-    
-    subtitle_html = f'<div style="font-size:10px;color:#9ca3af;margin-top:2px;">{subtitle}</div>' if subtitle else ""
-    
-    st.markdown(
-        f"""
-        <div style="
-            background:{bg};border:1px solid {border};
-            border-radius:12px;padding:14px 16px;
-            box-shadow:0 2px 8px rgba(0,0,0,.06);
-            transition:transform 0.2s ease;
-        " onmouseover="this.style.transform='translateY(-2px)'" 
-           onmouseout="this.style.transform='translateY(0)'">
-            <div style="font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">
-                {title}
-            </div>
-            <div style="font-size:28px;font-weight:800;color:{text};text-align:right;">
-                {formatted_value}
-            </div>
-            {trend_html}
-            {subtitle_html}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
 
 # ----------------------------
 # Enhanced Parser Functions
@@ -776,20 +734,22 @@ def main():
             else:
                 st.error(f"❌ {name}")
     
-    # Rest of the dashboard sections remain the same but with enhanced error handling
-    # [Previous sections for Bank Balances, Supplier Payments, LC Settlements, etc.]
-    # [I'll include the key sections here but abbreviated for space]
-    
     st.markdown("---")
     
     # Bank Balance Section
     st.header("🏦 Bank Balance")
+
     if df_by_bank.empty:
-        st.info("No bank balance data available.")
+        st.info("No balances found.")
     else:
-        view = st.radio("View Mode", options=["Cards", "Table"], index=0, horizontal=True)
+        view = st.radio("",
+                        options=["Cards", "Table"],
+                        index=0,
+                        horizontal=True,
+                        label_visibility="collapsed")
+
         df_bal_view = df_by_bank.copy().sort_values("balance", ascending=False)
-        
+
         if view == "Cards":
             cols = st.columns(4)
             for i, row in df_bal_view.iterrows():
@@ -931,14 +891,13 @@ def main():
                 st.metric("Average Payment", fmt_currency(view["amount"].mean()))
 
             # Bank-wise breakdown
-            grp = view.groupby("bank", as_index=False)["amount"].agg(['sum', 'count']).round(0)
-            grp.columns = ["Bank", "Total Amount", "Count"]
-            grp["Total Amount"] = grp["Total Amount"].map(fmt_currency)
-            
+            grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
             st.markdown("**📊 Summary by Bank**")
-            st.dataframe(grp, use_container_width=True, height=220)
+            grp2 = grp.rename(columns={"bank": "Bank", "amount": "Amount"}).copy()
+            grp2["Amount"] = grp2["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
+            
+            st.dataframe(grp2, use_container_width=True, height=220, hide_index=True)
 
-            # Detailed list
             st.markdown("**📋 Detailed Payment List**")
             show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view.columns]
             v = view[show_cols].rename(columns={
@@ -956,7 +915,10 @@ def main():
     # LC Settlements Section
     st.header("📅 LC Settlements — Pending")
     if df_lc.empty:
-        st.info("No pending LC settlements found.")
+        st.info(
+            "No LC (Pending) data. Ensure sheet has Bank, Maturity Date/New Maturity Date, "
+            "and any of: Balance for Settlement / Currently Due / Amount(SAR)."
+        )
     else:
         # Date range filter
         col1, col2 = st.columns(2)
@@ -975,15 +937,12 @@ def main():
             # Summary metrics
             cc1, cc2, cc3 = st.columns(3)
             with cc1:
-                enhanced_kpi_card("Total LC Amount", lc_view["amount"].sum(), 
-                                bg="#FFF7E6", border="#FDE9C8", text="#92400E")
+                simple_kpi_card("Total LC Amount", lc_view["amount"].sum(), "#FFF7E6", "#FDE9C8", "#92400E")
             with cc2:
-                enhanced_kpi_card("Number of LCs", len(lc_view), 
-                                bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
+                simple_kpi_card("Number of LCs", len(lc_view), "#E6F0FF", "#C7D8FE", "#1E3A8A")
             with cc3:
                 urgent_count = len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)])
-                enhanced_kpi_card("Urgent (2 days)", urgent_count, 
-                                bg="#FEE2E2", border="#FECACA", text="#991B1B")
+                simple_kpi_card("Urgent (2 days)", urgent_count, "#FEE2E2", "#FECACA", "#991B1B")
 
             # LC Table with enhanced formatting
             viz = lc_view.copy()
@@ -1043,6 +1002,13 @@ def main():
                     days_left = (lc["settlement_date"] - today0).days
                     st.write(f"• {lc['bank']} - {fmt_currency(lc['amount'])} - {days_left} day(s) left")
 
+            # Remarks list (if any)
+            if "Remark" in viz.columns:
+                remarks = viz.loc[viz["Remark"].astype(str).str.strip() != "", ["Settlement Date","Bank","Amount","Remark"]]
+                if not remarks.empty:
+                    st.subheader("List")
+                    st.dataframe(remarks, use_container_width=True, height=220)
+
     st.markdown("---")
 
     # Enhanced Liquidity Trend
@@ -1099,9 +1065,9 @@ def main():
             
             with col2:
                 st.markdown("### 📊 Liquidity Metrics")
-                enhanced_kpi_card("Current", latest_liquidity, bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
+                simple_kpi_card("Current", latest_liquidity, "#E6F0FF", "#C7D8FE", "#1E3A8A")
                 if len(df_fm) > 1:
-                    enhanced_kpi_card("Trend", trend_text, bg="#F0FDF4", border="#BBF7D0", text="#065F46")
+                    simple_kpi_card("Trend", trend_text, "#F0FDF4", "#BBF7D0", "#065F46")
                 
                 # Liquidity statistics
                 st.markdown("**Statistics (30d)**")
@@ -1178,27 +1144,6 @@ def main():
                 st.error(f"🚨 **{insight['title']}**: {insight['content']}")
     else:
         st.info("💡 Insights will appear as data becomes available and patterns emerge.")
-
-    # Export functionality
-    if st.session_state.get('show_export', False):
-        st.markdown("---")
-        st.subheader("📁 Export Data")
-        
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
-            if st.button("📊 Export to Excel", type="primary"):
-                excel_data = export_data_to_excel(df_by_bank, df_pay, df_lc, df_fm)
-                if excel_data:
-                    st.download_button(
-                        label="⬇️ Download Excel File",
-                        data=excel_data,
-                        file_name=f"treasury_dashboard_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-        with col2:
-            if st.button("❌ Cancel"):
-                st.session_state['show_export'] = False
-                st.rerun()
 
     # Footer with enhanced information
     st.markdown("---")
