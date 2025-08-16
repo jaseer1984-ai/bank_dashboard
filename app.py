@@ -652,7 +652,7 @@ def main():
         df_fm = pd.DataFrame()
         data_status['fund_movement'] = 'error'
     
-    # Calculate KPIs
+    # Calculate KPIs with safe defaults
     total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
     banks_cnt = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
     
@@ -665,41 +665,21 @@ def main():
     )
     approved_sum = df_pay["amount"].sum() if not df_pay.empty else 0.0
     
-    # Display KPIs with enhanced cards
+    # Display KPIs with simple cards
     k1, k2, k3, k4 = st.columns(4)
+    
     with k1:
-        # Use the original simple kpi_card instead of enhanced version to avoid HTML issues
-        kpi_card(
-            "Total Balance", 
-            total_balance,
-            bg="#E6F0FF", 
-            border="#C7D8FE", 
-            text="#1E3A8A"
-        )
+        kpi_card("Total Balance", total_balance, "#E6F0FF", "#C7D8FE", "#1E3A8A")
     with k2:
-        kpi_card(
-            "Approved Payments", 
-            approved_sum, 
-            bg="#E9FFF2", 
-            border="#C7F7DD", 
-            text="#065F46"
-        )
+        kpi_card("Approved Payments", approved_sum, "#E9FFF2", "#C7F7DD", "#065F46")
     with k3:
-        kpi_card(
-            "LC due (next 4 days)", 
-            lc_next4_sum, 
-            bg="#FFF7E6", 
-            border="#FDE9C8", 
-            text="#92400E"
-        )
+        kpi_card("LC due (next 4 days)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
     with k4:
-        kpi_card(
-            "Active Banks", 
-            banks_cnt, 
-            bg="#FFF1F2", 
-            border="#FBD5D8", 
-            text="#9F1239"
-        )
+        kpi_card("Active Banks", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
+    
+    # Add data freshness info below KPIs
+    if bal_date:
+        st.caption(f"💡 Bank balance data last updated: {bal_date.strftime('%Y-%m-%d at %H:%M')}")
     
     # Data Health Dashboard
     st.markdown("---")
