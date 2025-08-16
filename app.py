@@ -936,6 +936,12 @@ def main():
                 st.write(f"**Max:** {fmt_currency(recent_data['total_liquidity'].max())}")
                 st.write(f"**Min:** {fmt_currency(recent_data['total_liquidity'].min())}")
                 st.write(f"**Avg:** {fmt_currency(recent_data['total_liquidity'].mean())}")
+        
+        except Exception as e:
+            logger.error(f"Liquidity trend analysis error: {e}")
+            st.error("❌ Unable to display liquidity trend analysis")
+            # Fallback to simple chart
+            st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
     st.markdown("---")
 
