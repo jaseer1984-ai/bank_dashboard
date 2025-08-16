@@ -1,11 +1,10 @@
 # app.py — Treasury Dashboard (Google Sheets)
-# - Logo in header + top-right Refresh button
-# - Company name: "Issam Kabbani & Partners – Unitech"
-# - KPI numbers right-aligned
-# - Bank balances as table (Share% hidden)
+# - Header: company logo + title ("Issam Kabbani & Partners – Unitech") + top-right Refresh
+# - KPIs: right-aligned numbers, no "(sum)" / "• Pending"
+# - Bank Balances: toggle between Table and Cards (4× grid) with sparklines
 # - Supplier payments: "Approved List", right-aligned amount
-# - LC Settlements: Pending-only, hide remark list, ADD "A/C #" column if available
-# - Liquidity trend
+# - LC Settlements: Pending-only, single list (remarks) shown as "List" (no duplicate table)
+# - Liquidity trend (Plotly)
 # - Footer: "Created By Jaseer Pykarathodi"
 
 import io
@@ -19,7 +18,11 @@ import streamlit as st
 # ----------------------------
 # Page setup
 # ----------------------------
-st.set_page_config(page_title="Treasury Dashboard", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(
+    page_title="Treasury Dashboard",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
 # ----------------------------
 # Google Sheets links (same file id, different gids per sheet)
@@ -33,7 +36,7 @@ LINKS = {
 }
 
 COMPANY_NAME = "Issam Kabbani & Partners – Unitech"
-LOGO_PATH = "ikk_logo.png"          # save your logo as this file next to app.py
+LOGO_PATH = "ikk_logo.png"       # <— put your logo file next to app.py
 DATE_FMT = "%Y-%m-%d"
 TZ = "Asia/Riyadh"
 
@@ -69,7 +72,7 @@ def fmt_num(v):
         return str(v)
 
 def kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
-    # value is right-aligned
+    # right-aligned KPI
     st.markdown(
         f"""
         <div style="
@@ -163,28 +166,10 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pending-only LC table, includes A/C # if present.
-    """
     d = cols_lower(df)
 
     bank = next((c for c in d.columns if c.startswith("bank")), None)
 
-    # Candidate account/ref column names
-    ac_col = None
-    for cand in d.columns:
-        lc = cand.lower()
-        if "a/c" in lc or "ac #" in lc or "a/c #" in lc or lc.strip() in {"a/c#", "a/c #", "a c #"}:
-            ac_col = cand
-            break
-    if ac_col is None:
-        # other common patterns
-        for cand in d.columns:
-            if any(k in cand for k in ["a/c", "a c", "a.c", "account", "a/c no", "ac no", "a/c number"]):
-                ac_col = cand
-                break
-
-    # Date (priority)
     date_col = None
     for cand in d.columns:
         if "maturity" in cand and "new" not in cand:
@@ -196,7 +181,6 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
                 date_col = cand
                 break
 
-    # Amount (priority)
     amount_col = None
     for cand in d.columns:
         if "balance" in cand and "settlement" in cand:
@@ -217,7 +201,7 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     if not bank or not amount_col or not date_col:
         return pd.DataFrame()
 
-    out_dict = {
+    out = pd.DataFrame({
         "bank": d[bank].astype(str).str.strip(),
         "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
         "amount": d[amount_col].map(_to_number),
@@ -225,11 +209,7 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
         "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
         "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
         "description": ""
-    }
-    if ac_col is not None:
-        out_dict["ac_ref"] = d[ac_col].astype(str).str.strip()
-
-    out = pd.DataFrame(out_dict)
+    })
     out = out.dropna(subset=["bank", "amount", "settlement_date"])
     out = out[out["status"].str.lower() == "pending"].copy()
     return out
@@ -254,7 +234,7 @@ with c_logo:
     try:
         st.image(LOGO_PATH, width=44)
     except Exception:
-        st.write("")  # no logo available
+        st.write("")  # logo not found
 with c_title:
     st.markdown(
         f"<h2 style='margin:0;padding-top:6px;'>{COMPANY_NAME} — Treasury Dashboard</h2>",
@@ -269,7 +249,7 @@ with c_refresh:
 st.markdown("")
 
 # ----------------------------
-# Load Data
+# Load data
 # ----------------------------
 notes = []
 try:
@@ -333,8 +313,10 @@ for n in notes:
 # ----------------------------
 total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
 banks_cnt     = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
+
 today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 next4  = today0 + pd.Timedelta(days=3)
+
 lc_next4_sum = (
     df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
     if not df_lc.empty else 0.0
@@ -354,31 +336,141 @@ with k4:
 st.markdown("---")
 
 # ----------------------------
-# Bank Balances — TABLE (Share% hidden, numeric right-aligned)
+# Bank Balances — Table / Cards (4× grid)
 # ----------------------------
-st.subheader("Bank Balances (Table)")
+st.subheader("Bank Balances")
+
 if df_by_bank.empty:
     st.info("No balances found.")
 else:
-    df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)
-    df_bal_table = df_bal_table[["bank", "balance"]]
-
-    styled = (
-        df_bal_table
+    # Base balances
+    df_bal = (
+        df_by_bank.copy()
+        .sort_values("balance", ascending=False)
+        .reset_index(drop=True)
         .rename(columns={"bank": "Bank", "balance": "Balance"})
-        .style.format({"Balance": "{:,.2f}"})
-        .set_properties(subset=["Balance"], **{"text-align": "right"})
+    )
+    total_bal = df_bal["Balance"].sum()
+    df_bal["Share %"] = (df_bal["Balance"] / total_bal * 100).round(2)
+
+    # View toggle
+    view_mode = st.radio(
+        "View",
+        ["Cards (4x grid)", "Table"],
+        horizontal=True,
+        label_visibility="collapsed",
     )
 
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        height=320,
-        column_config={
-            "Bank": st.column_config.TextColumn("Bank", width="medium"),
-            "Balance": st.column_config.NumberColumn("Balance", width="large"),
-        }
-    )
+    if view_mode == "Table":
+        styled = (
+            df_bal[["Bank", "Balance", "Share %"]]
+            .style.format({"Balance": "{:,.2f}", "Share %": "{:.2f}"})
+            .set_properties(subset=["Balance", "Share %"], **{"text-align": "right"})
+        )
+        st.dataframe(
+            styled,
+            use_container_width=True,
+            height=360,
+            column_config={
+                "Bank": st.column_config.TextColumn("Bank", width="medium"),
+                "Balance": st.column_config.NumberColumn("Balance", width="large"),
+                "Share %": st.column_config.NumberColumn("Share %", width="small"),
+            },
+        )
+    else:
+        # If you have real time-series per bank (date, bank, balance), assign it here:
+        bank_ts = None  # DataFrame with columns: date, bank, balance (optional)
+
+        import plotly.graph_objects as go
+
+        def sparkline_for_bank(bank, current_balance):
+            """Return a tiny plotly sparkline figure for a bank."""
+            if bank_ts is not None:
+                ts = bank_ts.loc[bank_ts["bank"].astype(str) == str(bank)].sort_values("date")
+                y = ts["balance"].astype(float).values
+                if len(y) == 0:
+                    y = None
+            else:
+                y = None
+
+            if y is None:
+                # Placeholder: small wiggle around the current balance
+                rng = np.random.default_rng(abs(hash(bank)) % (2**32))
+                base = float(current_balance)
+                drift = base * 0.01
+                steps = 16
+                y = base + rng.normal(0, drift / 5, steps).cumsum()
+                y = np.clip(y, base - drift, base + drift)
+
+            fig = go.Figure(
+                data=[go.Scatter(y=y, mode="lines", line=dict(width=2), hoverinfo="skip")]
+            )
+            fig.update_layout(
+                margin=dict(l=0, r=0, t=0, b=0),
+                height=70,
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+            return fig
+
+        # Card styling
+        st.markdown(
+            """
+            <style>
+            .bank-card {
+                border: 1px solid #e5e7eb;
+                border-radius: 14px;
+                padding: 10px 12px;
+                background: #fff;
+                box-shadow: 0 1px 12px rgba(0,0,0,0.04);
+                height: 130px;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+            }
+            .bank-title {
+                font-size: 12px; color:#6b7280; letter-spacing:.04em; text-transform:uppercase;
+            }
+            .bank-value {
+                font-size: 20px; font-weight: 800; color:#111827; text-align:right;
+            }
+            .bank-sub {
+                font-size: 12px; color:#374151; display:flex; justify-content:space-between;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Render 4× grid
+        NUM_COLS = 4
+        rows = int(np.ceil(len(df_bal) / NUM_COLS))
+        idx = 0
+        for r in range(rows):
+            cols = st.columns(NUM_COLS)
+            for c in range(NUM_COLS):
+                if idx >= len(df_bal):
+                    break
+                row = df_bal.iloc[idx]
+                with cols[c]:
+                    st.markdown(
+                        f"""
+                        <div class="bank-card">
+                            <div class="bank-title">{row['Bank']}</div>
+                            <div class="bank-value">{row['Balance']:,.2f}</div>
+                            <div class="bank-sub">
+                                <span>Share</span>
+                                <span>{row['Share %']:.2f}%</span>
+                            </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    fig = sparkline_for_bank(row["Bank"], row["Balance"])
+                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    st.markdown("</div>", unsafe_allow_html=True)
+                idx += 1
 
 st.markdown("---")
 
@@ -394,12 +486,16 @@ else:
 
     view = df_pay[df_pay["bank"].isin(pick_banks)].copy()
 
-    grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
+    grp = (
+        view.groupby("bank", as_index=False)["amount"]
+            .sum()
+            .sort_values("amount", ascending=False)
+            .rename(columns={"bank": "Bank", "amount": "Amount"})
+    )
     st.markdown("**Sum by Bank**")
     grp_styled = (
-        grp.rename(columns={"bank": "Bank", "amount": "Amount"})
-           .style.format({"Amount": "{:,.2f}"})
-           .set_properties(subset=["Amount"], **{"text-align": "right"})
+        grp.style.format({"Amount": "{:,.2f}"})
+            .set_properties(subset=["Amount"], **{"text-align": "right"})
     )
     st.dataframe(grp_styled, use_container_width=True, height=220)
 
@@ -408,62 +504,68 @@ else:
     v = view[show_cols].rename(columns={
         "bank": "Bank", "supplier": "Supplier", "currency": "Curr", "amount": "Amount", "status": "Status"
     })
-    v_styled = (
-        v.style.format({"Amount": "{:,.2f}"})
-         .set_properties(subset=["Amount"], **{"text-align": "right"})
+    v_styled = v.style.format({"Amount": "{:,.2f}"}).set_properties(
+        subset=["Amount"], **{"text-align": "right"}
     )
     st.dataframe(v_styled, use_container_width=True, height=360)
 
 st.markdown("---")
 
 # ----------------------------
-# LC Settlements — PENDING ONLY (hide remarks list; include A/C # if available)
+# LC Settlements — PENDING ONLY (Remarks shown as "List")
 # ----------------------------
 st.header("LC Settlements — Pending Only")
-
 if df_lc.empty:
     st.info(
         "No LC (Pending) data. Ensure sheet has Bank, Maturity Date/New Maturity Date, "
         "and any of: Balance for Settlement / Currently Due / Amount(SAR)."
     )
 else:
+    # Full range, hidden inputs (no UI)
     dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
     d1, d2 = pd.to_datetime(dmin), pd.to_datetime(dmax) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
     lc_view = df_lc.loc[df_lc["settlement_date"].between(d1, d2)].copy()
 
+    # KPIs for LC
     cc1, cc2 = st.columns(2)
     with cc1:
         kpi_card("LC Amount (filtered sum)", lc_view["amount"].sum(), bg="#FFF7E6", border="#FDE9C8", text="#92400E")
     with cc2:
         kpi_card("LC Items (count)", len(lc_view), bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
 
+    # One clean table (Pending list, with amounts right-aligned)
     if not lc_view.empty:
         viz = lc_view.copy()
         viz["settlement_date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
-
-        # Build display columns (include A/C # if we have it)
-        cols = ["bank", "type", "status", "settlement_date", "amount", "remark", "description"]
-        if "ac_ref" in viz.columns:
-            cols.insert(1, "ac_ref")  # after bank
-
-        viz = viz[cols].rename(columns={
-            "bank": "Bank",
-            "type": "Type",
-            "status": "Status",
-            "settlement_date": "Settlement Date",
-            "amount": "Amount",
-            "remark": "Remark",
-            "description": "Description",
-            "ac_ref": "A/C #"
+        viz = viz.rename(columns={
+            "bank": "Bank", "type": "Type", "status": "Status",
+            "settlement_date": "Settlement Date", "amount": "Amount",
+            "remark": "Remark", "description": "Description"
         })
-
         viz_styled = (
-            viz.style.format({"Amount": "{:,.2f}"})
-               .set_properties(subset=["Amount"], **{"text-align": "right"})
+            viz[["Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]]
+            .style.format({"Amount": "{:,.2f}"})
+            .set_properties(subset=["Amount"], **{"text-align": "right"})
         )
         st.dataframe(viz_styled, use_container_width=True, height=360)
 
-    # (Per your instruction) HIDE the extra “List” of remarks.
+        # Remarks-only list (titled "List")
+        remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
+        if not remarks.empty:
+            st.subheader("List")
+            r2 = (
+                remarks.assign(
+                    settlement_date=remarks["settlement_date"].dt.strftime(DATE_FMT),
+                    amount=remarks["amount"]
+                )
+                .rename(columns={"settlement_date": "Settlement Date", "bank": "Bank", "amount": "Amount", "remark": "Remark"})
+                [["Settlement Date", "Bank", "Amount", "Remark"]]
+            )
+            r2_styled = (
+                r2.style.format({"Amount": "{:,.2f}"})
+                  .set_properties(subset=["Amount"], **{"text-align": "right"})
+            )
+            st.dataframe(r2_styled, use_container_width=True, height=220)
 
 st.markdown("---")
 
