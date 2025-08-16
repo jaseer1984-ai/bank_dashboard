@@ -3,7 +3,8 @@
 # - KPI numbers right-aligned (no "(sum)" / "• Pending")
 # - Bank balances as table (Share% hidden)
 # - Supplier payments: "Approved List", right-aligned amount
-# - LC Settlements: Pending-only, hide date range input, remarks table shown as "List"
+# - LC Settlements: Pending-only, HIDE "List" table
+#   and SHOW reference column (A/C #) inside the main pending table
 # - Liquidity trend
 # - Footer: "Created By Jaseer Pykarathodi"
 
@@ -161,10 +162,32 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         out["status"] = out["status"].astype(str).str.title()
     return out
 
+def _find_ac_col(cols: list[str]) -> str | None:
+    """
+    Try to find the A/C column (‘A/C #’, ‘ac #’, ‘account’, etc.) in lower-cased headers.
+    """
+    for c in cols:
+        cl = c.lower().strip()
+        norm = cl.replace(" ", "").replace("/", "").replace("\\", "").replace("#", "")
+        if "a" in norm and "c" in norm:
+            # matches strings like "a/c#", "ac#", "a_c", etc.
+            if "ac" in norm:
+                return c
+        if "account" in norm:
+            return c
+    # common explicit possibilities
+    for cand in ["a/c #", "a/c#", "ac #", "ac#", "a/c", "account #", "account#", "a c #"]:
+        if cand in cols:
+            return cand
+    return None
+
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     d = cols_lower(df)
 
     bank = next((c for c in d.columns if c.startswith("bank")), None)
+
+    # detect A/C column
+    ac_col = _find_ac_col(list(d.columns))
 
     date_col = None
     for cand in d.columns:
@@ -204,7 +227,8 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
         "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
         "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
         "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
-        "description": ""
+        "description": "",
+        "ac_ref": d[ac_col].astype(str).str.strip() if ac_col and ac_col in d.columns else ""
     })
     out = out.dropna(subset=["bank", "amount", "settlement_date"])
     out = out[out["status"].str.lower() == "pending"].copy()
@@ -240,7 +264,7 @@ with c_refresh:
     st.caption(datetime.now().strftime("Last refresh: %Y-%m-%d %H:%M:%S"))
     if st.button("Refresh", type="primary", use_container_width=True):
         st.cache_data.clear()
-        st.rerun()   # <<<<<< FIX: use st.rerun() instead of st.experimental_rerun()
+        st.rerun()
 
 st.markdown("")
 
@@ -395,7 +419,8 @@ else:
 st.markdown("---")
 
 # ----------------------------
-# LC Settlements — PENDING ONLY (Remarks table shown as "List")
+# LC Settlements — PENDING ONLY
+# (Hides the old "List" table; shows A/C # reference in the main table)
 # ----------------------------
 st.header("LC Settlements — Pending Only")
 
@@ -420,33 +445,25 @@ else:
         viz = lc_view.copy()
         viz["settlement_date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
         viz = viz.rename(columns={
-            "bank": "Bank", "type": "Type", "status": "Status",
-            "settlement_date": "Settlement Date", "amount": "Amount",
-            "remark": "Remark", "description": "Description"
+            "bank": "Bank",
+            "type": "Type",
+            "status": "Status",
+            "settlement_date": "Settlement Date",
+            "amount": "Amount",
+            "remark": "Remark",
+            "description": "Description",
+            "ac_ref": "A/C #"
         })
+        # Order includes A/C # column inside the main table
+        order_cols = [c for c in ["A/C #", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"] if c in viz.columns]
         viz_styled = (
-            viz[["Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]]
+            viz[order_cols]
             .style.format({"Amount": "{:,.2f}"})
             .set_properties(subset=["Amount"], **{"text-align": "right"})
         )
         st.dataframe(viz_styled, use_container_width=True, height=360)
 
-        remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
-        if not remarks.empty:
-            st.subheader("List")
-            r2 = (
-                remarks.assign(
-                    settlement_date=remarks["settlement_date"].dt.strftime(DATE_FMT),
-                    amount=remarks["amount"]
-                )
-                .rename(columns={"settlement_date": "Settlement Date", "bank": "Bank", "amount": "Amount", "remark": "Remark"})
-                [["Settlement Date", "Bank", "Amount", "Remark"]]
-            )
-            r2_styled = (
-                r2.style.format({"Amount": "{:,.2f}"})
-                  .set_properties(subset=["Amount"], **{"text-align": "right"})
-            )
-            st.dataframe(r2_styled, use_container_width=True, height=220)
+    # NOTE: The separate "List" (remarks) table is intentionally hidden as requested.
 
 st.markdown("---")
 
