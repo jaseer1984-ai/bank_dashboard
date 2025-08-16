@@ -268,7 +268,16 @@ def fmt_full_int(v) -> str:
     except (ValueError, TypeError):
         return str(v)
 
-def fmt_currency(v, currency="SAR") -> str:
+def fmt_currency_aligned(v, currency="SAR") -> str:
+    """Format number as currency with right alignment using HTML"""
+    try:
+        if pd.isna(v):
+            return "N/A"
+        # Add extra spaces to push the text to the right
+        formatted = f"{currency} {float(v):,.0f}"
+        return f"{'':>20}{formatted}"  # Right-pad with spaces
+    except (ValueError, TypeError):
+        return str(v)
     """Format number as currency"""
     try:
         if pd.isna(v):
@@ -798,17 +807,15 @@ def main():
                     )
         else:
             df_bal_table = df_bal_view[["bank", "balance"]].rename(columns={"bank": "Bank", "balance": "Balance"})
-            df_bal_table["Balance"] = df_bal_table["Balance"].map(lambda x: fmt_currency(x))
+            # Use right-aligned currency formatting
+            df_bal_table["Balance"] = df_bal_table["Balance"].map(lambda x: f"{fmt_currency(x):>20}")
             
-            # Apply custom styling for right alignment of numbers
-            def style_table(df):
-                return df.style.set_properties(**{
-                    'text-align': 'right'
-                }, subset=['Balance']).set_properties(**{
-                    'text-align': 'left'
-                }, subset=['Bank'])
-            
-            st.dataframe(style_table(df_bal_table), use_container_width=True, height=360)
+            st.dataframe(
+                df_bal_table, 
+                use_container_width=True, 
+                height=360,
+                hide_index=True
+            )
 
     st.markdown("---")
 
@@ -858,15 +865,19 @@ def main():
             }).copy()
             v["Amount"] = v["Amount"].map(fmt_currency)
             
-            # Style the detailed table
-            def style_detailed_table(df):
-                return df.style.set_properties(**{
-                    'text-align': 'right'
-                }, subset=['Amount']).set_properties(**{
-                    'text-align': 'left'
-                }, subset=[col for col in df.columns if col != 'Amount'])
-            
-            st.dataframe(style_detailed_table(v), use_container_width=True, height=360)
+            st.dataframe(
+                v, 
+                use_container_width=True, 
+                height=360,
+                column_config={
+                    "Amount": st.column_config.TextColumn(
+                        "Amount",
+                        help="Payment amount",
+                        width="medium",
+                    )
+                },
+                hide_index=True
+            )
         else:
             st.info("No payments match the selected criteria.")
 
