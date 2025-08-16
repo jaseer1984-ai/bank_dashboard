@@ -298,7 +298,8 @@ lc_next4_sum = (
 approved_sum = df_pay["amount"].sum() if not df_pay.empty else 0.0
 
 c1, c2, c3, c4 = st.columns(4)
-with c1: kpi_card("Total Balance", total_balance, f"As of {bal_date}", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
+# ▼▼ change: removed "As of {bal_date}" subtitle
+with c1: kpi_card("Total Balance", total_balance, "", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
 with c2: kpi_card("Approved Payments (sum)", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
 with c3: kpi_card("LC due (next 4 days) • Pending", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
 with c4: kpi_card("Banks", banks_cnt, bg="#FFF1F2", border="#FBD5D8", text="#9F1239")
@@ -306,7 +307,8 @@ with c4: kpi_card("Banks", banks_cnt, bg="#FFF1F2", border="#FBD5D8", text="#9F1
 # ---------------------------------------------------------------------------
 # Bank Balances — TABLE VIEW
 # ---------------------------------------------------------------------------
-st.subheader("Bank Balances (Table)")
+# ▼▼ change: removed "(Table)" wording
+st.markdown("### Bank Balances")
 if df_by_bank.empty:
     st.info("No balances found.")
 else:
@@ -349,7 +351,8 @@ st.markdown("---")
 # ---------------------------------------------------------------------------
 # LC Settlements — PENDING ONLY (with REMARKS)
 # ---------------------------------------------------------------------------
-st.header("LC Settlements — Pending Only")
+# ▼▼ change: header text without "— Pending Only"
+st.header("LC Settlements")
 if df_lc.empty:
     st.info("No LC (Pending) data. Ensure sheet has Bank, Maturity Date/New Maturity Date, and any of: Balance for Settlement / Currently Due / Amount(SAR).")
 else:
