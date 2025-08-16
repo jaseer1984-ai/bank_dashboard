@@ -619,11 +619,10 @@ def render_header():
         current_time = datetime.now().strftime("Last refresh: %Y-%m-%d %H:%M:%S")
         st.caption(current_time)
         
-        with col1:
-            if st.button("🔄 Refresh", type="primary", use_container_width=True):
-                st.cache_data.clear()
-                logger.info("Manual refresh triggered")
-                st.rerun()
+        if st.button("🔄 Refresh", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            logger.info("Manual refresh triggered")
+            st.rerun()
 
 # ----------------------------
 # Main Application
