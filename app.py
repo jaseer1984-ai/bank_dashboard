@@ -1,8 +1,10 @@
 # Treasury Dashboard — Google Sheets
+# - Supplier Payments: parser fix + Approved-only
+# - Bank Balances: table view (custom widths, right-aligned)
+# - LC Settlements: Pending-only + List panel
 # File: app.py
 
-import io
-import time
+import io, time, re
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
@@ -11,9 +13,9 @@ import streamlit as st
 
 st.set_page_config(page_title="Treasury Dashboard", layout="wide")
 
-# -----------------------------------------------------------------------------
-# GOOGLE SHEET
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# YOUR GOOGLE SHEET (same file id, different gids per tab)
+# ---------------------------------------------------------------------------
 FILE_ID = "1371amvaCbejUWVJI_moWdIchy5DF1lPO"
 LINKS = {
     "BANK BALANCE":      f"https://docs.google.com/spreadsheets/d/{FILE_ID}/export?format=csv&gid=860709395",
@@ -26,20 +28,15 @@ COMPANY = "Issam Kaabani Partners"
 DATE_FMT = "%Y-%m-%d"
 TZ = "Asia/Riyadh"
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Helpers
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def _to_number(x):
-    """Parse numbers like '1,234.56', '92%' to floats; NaN on failure."""
-    if pd.isna(x):
-        return np.nan
+    if pd.isna(x): return np.nan
     s = str(x).strip().replace(",", "")
-    if s.endswith("%"):
-        s = s[:-1]
-    try:
-        return float(s)
-    except Exception:
-        return np.nan
+    if s.endswith("%"): s = s[:-1]
+    try: return float(s)
+    except Exception: return np.nan
 
 @st.cache_data(ttl=300)
 def read_csv(url: str) -> pd.DataFrame:
@@ -53,43 +50,76 @@ def cols_lower(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def fmt_num(v):
-    try:
-        return f"{float(v):,.2f}"
-    except Exception:
-        return str(v)
+    try: return f"{float(v):,.2f}"
+    except: return str(v)
 
 def kpi_card(title, value, subtitle="", bg="#EEF2FF", border="#C7D2FE", text="#111827"):
-    """Right-aligned figure inside the card; subtle left-aligned title/subtitle."""
+    # Right-align the big figure
     st.markdown(
         f"""
         <div style="
             background:{bg};border:1px solid {border};
             border-radius:12px;padding:12px 14px;
             box-shadow:0 1px 6px rgba(0,0,0,.04);">
-            <div style="font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em">
-                {title}
-            </div>
+            <div style="font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em">{title}</div>
             <div style="font-size:26px;font-weight:800;color:{text};margin-top:2px;text-align:right">
                 {fmt_num(value) if isinstance(value,(int,float,np.integer,np.floating)) else value}
             </div>
-            <div style="font-size:12px;color:#6B7280;margin-top:2px">
-                {subtitle}
-            </div>
+            <div style="font-size:12px;color:#6B7280;margin-top:2px">{subtitle}</div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-# -----------------------------------------------------------------------------
+# ---- HTML table renderer for Bank Balances (fixed widths, right-aligned) ---
+def render_bank_table_html(df: pd.DataFrame, widths):
+    """Render a compact HTML table with controlled column widths."""
+    df = df.copy()
+    df["Balance"] = df["Balance"].map(fmt_num)
+    df["Share %"] = df["Share %"].map(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+
+    # Build HTML
+    header_html = "".join(
+        f'<th style="width:{widths.get(col, "auto")}; text-align:{"right" if col!="Bank" else "left"}; padding:8px 10px;">{col}</th>'
+        for col in df.columns
+    )
+    rows_html = []
+    for _, r in df.iterrows():
+        row = "".join(
+            f'<td style="text-align:{"right" if c!="Bank" else "left"}; padding:8px 10px;">{r[c]}</td>'
+            for c in df.columns
+        )
+        rows_html.append(f"<tr>{row}</tr>")
+
+    html = f"""
+    <style>
+      .bbank-table {{
+        border-collapse: separate;
+        border-spacing: 0;
+        width: 100%;
+        font-size: 0.95rem;
+      }}
+      .bbank-table thead th {{
+        background: #f7faff;
+        border-bottom: 1px solid #e5e7eb;
+        color: #111827;
+        font-weight: 600;
+      }}
+      .bbank-table tbody tr:nth-child(even) td {{ background: #fbfdff; }}
+      .bbank-table tbody tr:hover td {{ background: #f2f7ff; }}
+    </style>
+    <table class="bbank-table">
+      <thead><tr>{header_html}</tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
 # Parsers
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def parse_bank_balance(df: pd.DataFrame):
-    """
-    A) If columns 'Bank' and ('Amount' or 'Amount(SAR)') exist -> sum by bank.
-    B) Otherwise, bank name column + date headers -> pick latest date column.
-    """
     c = cols_lower(df)
-    # Case A
     if "bank" in c.columns and ("amount" in c.columns or "amount(sar)" in c.columns):
         amt_col = "amount" if "amount" in c.columns else "amount(sar)"
         out = pd.DataFrame({
@@ -100,32 +130,27 @@ def parse_bank_balance(df: pd.DataFrame):
         by_bank = out.groupby("bank", as_index=False)["balance"].sum()
         return by_bank, latest_date
 
-    # Case B
     raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
     bank_col = None
     for col in raw.columns:
         if raw[col].dtype == object and (raw[col].dropna().astype(str).str.strip() != "").sum() >= 3:
-            bank_col = col
-            break
+            bank_col = col; break
     if bank_col is None:
         raise ValueError("BANK BALANCE: could not detect bank column.")
 
-    parsed = pd.to_datetime(pd.Index(raw.columns), errors="coerce")
+    parsed = pd.to_datetime(pd.Index(raw.columns), errors="coerce", dayfirst=False)
     date_cols = [col for col, d in zip(raw.columns, parsed) if pd.notna(d)]
     if not date_cols:
         raise ValueError("BANK BALANCE: no date columns in header.")
-
-    date_map = {col: pd.to_datetime(col, errors="coerce") for col in date_cols}
+    date_map = {col: pd.to_datetime(col, errors="coerce", dayfirst=False) for col in date_cols}
     latest_col = max(date_cols, key=lambda c: date_map[c])
 
     s = raw[bank_col].astype(str).str.strip()
     mask = s.ne("") & ~s.str.contains("available|total", case=False, na=False)
-
     sub = raw.loc[mask, [bank_col, latest_col]].copy()
     sub.columns = ["bank", "balance"]
-    sub["balance"] = sub["balance"].map(_to_number)
+    sub["balance"] = sub["balance"].astype(str).str.replace(",", "", regex=False).map(_to_number)
     sub["bank"] = sub["bank"].str.replace(r"\s*-\s*.*$", "", regex=True).str.strip()
-
     latest_date = date_map[latest_col].date()
     by_bank = sub.dropna().groupby("bank", as_index=False)["balance"].sum()
     return by_bank, latest_date
@@ -138,20 +163,16 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     })
     if "bank" not in d.columns or "status" not in d.columns:
         return pd.DataFrame()
-
     status_norm = d["status"].astype(str).str.strip().str.lower()
     approved_mask = status_norm.str.contains("approved")
     d = d.loc[approved_mask].copy()
     if d.empty:
         return pd.DataFrame()
-
     amt_col = "amount_sar" if "amount_sar" in d.columns else ("amount" if "amount" in d.columns else None)
     if amt_col is None:
         return pd.DataFrame()
-
     d["amount"] = d[amt_col].map(_to_number)
     d["bank"] = d["bank"].astype(str).str.strip()
-
     keep = [c for c in ["bank","supplier","currency","amount","status"] if c in d.columns]
     out = d[keep].dropna(subset=["amount"]).copy()
     if "status" in out.columns:
@@ -160,42 +181,30 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     d = cols_lower(df)
-
     bank = next((c for c in d.columns if c.startswith("bank")), None)
-
-    # Date
     date_col = None
     for cand in d.columns:
         if "maturity" in cand and "new" not in cand:
-            date_col = cand
-            break
+            date_col = cand; break
     if date_col is None:
         for cand in d.columns:
             if "new" in cand and "maturity" in cand:
-                date_col = cand
-                break
-
-    # Amount
+                date_col = cand; break
     amount_col = None
     for cand in d.columns:
         if "balance" in cand and "settlement" in cand:
-            amount_col = cand
-            break
+            amount_col = cand; break
     if amount_col is None:
         for cand in d.columns:
             if "currently" in cand and "due" in cand:
-                amount_col = cand
-                break
+                amount_col = cand; break
     if amount_col is None:
         amount_col = "amount(sar)" if "amount(sar)" in d.columns else ("amount" if "amount" in d.columns else None)
-
     status_col = next((c for c in d.columns if "status" in c), None)
     type_col   = next((c for c in d.columns if "type" in c), None)
     remark_col = next((c for c in d.columns if "remark" in c), None)
-
     if not bank or not amount_col or not date_col:
         return pd.DataFrame()
-
     out = pd.DataFrame({
         "bank": d[bank].astype(str).str.strip(),
         "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
@@ -221,90 +230,62 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
     }).dropna()
     return out.sort_values("date")
 
-# -----------------------------------------------------------------------------
-# Header + Refresh (top-right)
-# -----------------------------------------------------------------------------
-left, right = st.columns([1, 0.12])
+# ---------------------------------------------------------------------------
+# Header & Top-right Refresh
+# ---------------------------------------------------------------------------
+left, right = st.columns([0.86, 0.14])
 with left:
     st.title(f"{COMPANY} — Treasury Dashboard")
     st.caption(pd.Timestamp.now(tz=TZ).strftime("Last refresh: %Y-%m-%d %H:%M:%S %Z"))
 with right:
+    st.write("")  # spacer
     if st.button("🔄 Refresh", use_container_width=True):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Load
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 notes = []
-try:
-    df_bal_raw = read_csv(LINKS["BANK BALANCE"])
-except Exception as e:
-    notes.append(f"BANK BALANCE load error: {e}")
-    df_bal_raw = pd.DataFrame()
+try: df_bal_raw = read_csv(LINKS["BANK BALANCE"])
+except Exception as e: notes.append(f"BANK BALANCE load error: {e}"); df_bal_raw = pd.DataFrame()
+try: df_pay_raw = read_csv(LINKS["SUPPLIER PAYMENTS"])
+except Exception as e: notes.append(f"SUPPLIER PAYMENTS load error: {e}"); df_pay_raw = pd.DataFrame()
+try: df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
+except Exception as e: notes.append(f"SETTLEMENTS load error: {e}"); df_lc_raw = pd.DataFrame()
+try: df_fm_raw = read_csv(LINKS["Fund Movement"])
+except Exception as e: notes.append(f"Fund Movement load error: {e}"); df_fm_raw = pd.DataFrame()
 
-try:
-    df_pay_raw = read_csv(LINKS["SUPPLIER PAYMENTS"])
-except Exception as e:
-    notes.append(f"SUPPLIER PAYMENTS load error: {e}")
-    df_pay_raw = pd.DataFrame()
-
-try:
-    df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
-except Exception as e:
-    notes.append(f"SETTLEMENTS load error: {e}")
-    df_lc_raw = pd.DataFrame()
-
-try:
-    df_fm_raw = read_csv(LINKS["Fund Movement"])
-except Exception as e:
-    notes.append(f"Fund Movement load error: {e}")
-    df_fm_raw = pd.DataFrame()
-
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Parse
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 df_by_bank, bal_date = pd.DataFrame(), None
 if not df_bal_raw.empty:
-    try:
-        df_by_bank, bal_date = parse_bank_balance(df_bal_raw)
-    except Exception as e:
-        notes.append(f"BANK BALANCE parse: {e}")
-
+    try: df_by_bank, bal_date = parse_bank_balance(df_bal_raw)
+    except Exception as e: notes.append(f"BANK BALANCE parse: {e}")
 df_pay = pd.DataFrame()
 if not df_pay_raw.empty:
-    try:
-        df_pay = parse_supplier_payments(df_pay_raw)   # Approved only
-    except Exception as e:
-        notes.append(f"SUPPLIER PAYMENTS parse: {e}")
-
+    try: df_pay = parse_supplier_payments(df_pay_raw)   # Approved ONLY
+    except Exception as e: notes.append(f"SUPPLIER PAYMENTS parse: {e}")
 df_lc = pd.DataFrame()
 if not df_lc_raw.empty:
-    try:
-        df_lc = parse_settlements(df_lc_raw)           # Pending only
-    except Exception as e:
-        notes.append(f"SETTLEMENTS parse: {e}")
-
+    try: df_lc = parse_settlements(df_lc_raw)           # Pending ONLY + remark
+    except Exception as e: notes.append(f"SETTLEMENTS parse: {e}")
 df_fm = pd.DataFrame()
 if not df_fm_raw.empty:
-    try:
-        df_fm = parse_fund_movement(df_fm_raw)
-    except Exception as e:
-        notes.append(f"Fund Movement parse: {e}")
+    try: df_fm = parse_fund_movement(df_fm_raw)
+    except Exception as e: notes.append(f"Fund Movement parse: {e}")
 
 if notes:
-    for n in notes:
-        st.warning(n)
+    for n in notes: st.warning(n)
 
-# -----------------------------------------------------------------------------
-# KPIs
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# KPIs (titles adjusted: remove "(sum)" and "• Pending")
+# ---------------------------------------------------------------------------
 total_balance = df_by_bank["balance"].sum() if not df_by_bank.empty else 0.0
 banks_cnt = df_by_bank["bank"].nunique() if not df_by_bank.empty else 0
-
 today = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 next4 = today + pd.Timedelta(days=3)
-
 lc_next4_sum = (
     df_lc.loc[df_lc["settlement_date"].between(today, next4), "amount"].sum()
     if not df_lc.empty else 0.0
@@ -312,155 +293,112 @@ lc_next4_sum = (
 approved_sum = df_pay["amount"].sum() if not df_pay.empty else 0.0
 
 c1, c2, c3, c4 = st.columns(4)
-with c1:
-    kpi_card("TOTAL BALANCE", total_balance, f"As of {bal_date}", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
-with c2:
-    kpi_card("APPROVED PAYMENTS", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
-with c3:
-    kpi_card("LC DUE (NEXT 4 DAYS)", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
-with c4:
-    kpi_card("BANKS", banks_cnt, bg="#FFF1F2", border="#FBD5D8", text="#9F1239")
+with c1: kpi_card("Total Balance", total_balance, "", bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
+with c2: kpi_card("Approved Payments", approved_sum, bg="#E9FFF2", border="#C7F7DD", text="#065F46")
+with c3: kpi_card("LC due (next 4 days)", lc_next4_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
+with c4: kpi_card("Banks", banks_cnt, bg="#FFF1F2", border="#FBD5D8", text="#9F1239")
 
-# -----------------------------------------------------------------------------
-# Bank Balances — Table
-# -----------------------------------------------------------------------------
-st.subheader("Bank Balances (Table)")
+# ---------------------------------------------------------------------------
+# Bank Balances — custom-width HTML table
+# ---------------------------------------------------------------------------
+st.markdown("### Bank Balances")
 if df_by_bank.empty:
     st.info("No balances found.")
 else:
-    t = df_by_bank.copy().sort_values("balance", ascending=False)
-    total = t["balance"].sum()
-    t["Share %"] = (t["balance"] / total * 100.0)
-    t = t.rename(columns={"bank": "Bank", "balance": "Balance"})
-    st.dataframe(
-        t,
-        use_container_width=True,
-        hide_index=True,
-        height=320,
-        column_config={
-            "Bank": st.column_config.TextColumn(width="large"),
-            "Balance": st.column_config.NumberColumn(format="%,.2f", width="medium"),
-            "Share %": st.column_config.NumberColumn(format="%.2f%%", width="small"),
-        },
-    )
-
+    df_bal_table = df_by_bank.copy().sort_values("balance", ascending=False)
+    total = df_bal_table["balance"].sum()
+    df_bal_table["share_%"] = (df_bal_table["balance"] / total * 100)
+    df_bal_table = df_bal_table.rename(columns={"bank": "Bank", "balance": "Balance", "share_%": "Share %"})[
+        ["Bank", "Balance", "Share %"]
+    ]
+    render_bank_table_html(df_bal_table, widths={"Bank": "12%", "Balance": "18%", "Share %": "12%"})
 st.markdown("---")
 
-# -----------------------------------------------------------------------------
-# Supplier Payments — Approved Only
-# -----------------------------------------------------------------------------
-st.header("Approved List")
+# ---------------------------------------------------------------------------
+# Approved Supplier Payments
+# ---------------------------------------------------------------------------
+st.header("Approved Supplier Payments")
 if df_pay.empty:
     st.info("No Approved payments in sheet.")
 else:
-    # Optional filter by bank (kept, but you can remove if not needed)
-    fb, _ = st.columns([1.3, 1])
-    with fb:
+    colf1, _ = st.columns([1.4, 1])
+    with colf1:
         banks = sorted(df_pay["bank"].dropna().unique())
         pick_banks = st.multiselect("Filter by Bank", banks, default=banks)
+
     view = df_pay[df_pay["bank"].isin(pick_banks)].copy()
 
-    # Sum by bank
     grp = view.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
     st.markdown("**Sum by Bank (Approved)**")
     st.dataframe(
-        grp.rename(columns={"bank": "Bank", "amount": "Amount"}),
-        use_container_width=True,
-        hide_index=True,
-        height=220,
-        column_config={"Amount": st.column_config.NumberColumn(format="%,.2f", width="medium")},
+        grp.assign(amount=grp["amount"].map(fmt_num)).rename(columns={"bank":"Bank","amount":"Amount"}),
+        use_container_width=True, height=220
     )
 
-    # Approved items (keep numeric - aligns right)
-    st.markdown("**Approved List**")
-    show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view.columns]
-    v = view[show_cols].rename(columns={"bank": "Bank", "supplier": "Supplier", "currency": "Curr", "amount": "Amount", "status": "Status"})
+    st.markdown("**Approved rows**")
+    show_cols = [c for c in ["bank","supplier","currency","amount","status"] if c in view.columns]
+    v = view.copy(); v["amount"] = v["amount"].map(fmt_num)
     st.dataframe(
-        v,
-        use_container_width=True,
-        hide_index=True,
-        height=360,
-        column_config={
-            "Amount": st.column_config.NumberColumn(format="%,.2f", width="medium"),
-        },
+        v[show_cols].rename(columns={"bank":"Bank","supplier":"Supplier","currency":"Curr","amount":"Amount","status":"Status"}),
+        use_container_width=True, height=360
     )
 
 st.markdown("---")
 
-# -----------------------------------------------------------------------------
-# LC Settlements — Pending Only (List)
-# -----------------------------------------------------------------------------
-st.header("LC Settlements — Pending Only")
+# ---------------------------------------------------------------------------
+# LC Settlements — Pending ONLY (with LIST)
+# ---------------------------------------------------------------------------
+st.header("LC Settlements")
 if df_lc.empty:
-    st.info("No LC (Pending) data. Ensure sheet has Bank, date, and an amount column.")
+    st.info("No LC (Pending) data. Ensure sheet has Bank, Maturity Date/New Maturity Date, and any of: Balance for Settlement / Currently Due / Amount(SAR).")
 else:
-    # Hidden date range: use full available range automatically
-    dmin = df_lc["settlement_date"].min()
-    dmax = df_lc["settlement_date"].max()
-    d1, d2 = dmin, dmax
-
-    # Bank filter
-    l1, _ = st.columns([1.2, 1])
+    l1, l2, l3 = st.columns([1.2, 1.2, 1])
     with l1:
         banks = sorted(df_lc["bank"].dropna().unique())
         sel_banks = st.multiselect("Bank", banks, default=banks)
+    with l2:
+        dmin, dmax = df_lc["settlement_date"].min().date(), df_lc["settlement_date"].max().date()
+        rng = st.date_input("Settlement date range", (dmin, dmax))
+    with l3:
+        pass
 
+    d1, d2 = pd.to_datetime(rng[0]), pd.to_datetime(rng[1]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
     mask = df_lc["bank"].isin(sel_banks) & df_lc["settlement_date"].between(d1, d2)
     lc_view = df_lc.loc[mask].copy()
 
-    lc_sum = lc_view["amount"].sum()
-    lc_cnt = len(lc_view)
+    lc_sum = lc_view["amount"].sum(); lc_cnt = len(lc_view)
     cc1, cc2 = st.columns(2)
-    with cc1:
-        kpi_card("LC AMOUNT (FILTERED)", lc_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
-    with cc2:
-        kpi_card("LC ITEMS (COUNT)", lc_cnt, bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
+    with cc1: kpi_card("LC Amount (filtered sum)", lc_sum, bg="#FFF7E6", border="#FDE9C8", text="#92400E")
+    with cc2: kpi_card("LC Items (count)", lc_cnt, bg="#E6F0FF", border="#C7D8FE", text="#1E3A8A")
 
     if not lc_view.empty:
         viz = lc_view.copy()
-        viz["Settlement Date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
-        show = ["bank", "type", "status", "Settlement Date", "amount", "remark", "description"]
-        show = [c for c in show if c in list(viz.columns) + ["Settlement Date"]]
-        viz = viz.rename(columns={
-            "bank": "Bank",
-            "type": "Type",
-            "status": "Status",
-            "amount": "Amount",
-            "remark": "Remark",
-            "description": "Description",
-        })
+        viz["settlement_date"] = pd.to_datetime(viz["settlement_date"]).dt.strftime(DATE_FMT)
+        viz["amount"] = viz["amount"].map(fmt_num)
+        show = [c for c in ["bank","type","status","settlement_date","amount","remark","description"] if c in viz.columns]
         st.dataframe(
-            viz[show].sort_values("Settlement Date"),
-            use_container_width=True,
-            hide_index=True,
-            height=360,
-            column_config={"Amount": st.column_config.NumberColumn(format="%,.2f", width="medium")},
+            viz[show].rename(columns={
+                "bank":"Bank","type":"Type","status":"Status","settlement_date":"Settlement Date","amount":"Amount","remark":"Remark","description":"Description"
+            }).sort_values("Settlement Date"),
+            use_container_width=True, height=360
         )
 
-        # “List” of remarks (only rows having remark text)
+        # Renamed section from "Remarks" -> "List"
         remarks = lc_view.loc[lc_view["remark"].astype(str).str.strip() != ""].copy()
         if not remarks.empty:
             st.subheader("List")
             remarks = remarks.assign(
-                Settlement_Date=remarks["settlement_date"].dt.strftime(DATE_FMT)
-            ).rename(columns={
-                "bank": "Bank",
-                "amount": "Amount",
-                "remark": "Remark",
-            })[["Settlement_Date", "Bank", "Amount", "Remark"]].sort_values("Settlement_Date")
-            st.dataframe(
-                remarks,
-                use_container_width=True,
-                hide_index=True,
-                height=220,
-                column_config={"Amount": st.column_config.NumberColumn(format="%,.2f", width="medium")},
-            )
+                settlement_date=remarks["settlement_date"].dt.strftime(DATE_FMT),
+                amount=remarks["amount"].map(fmt_num)
+            )[["settlement_date","bank","amount","remark"]].sort_values("settlement_date")
+            remarks = remarks.rename(columns={"settlement_date":"Settlement Date","bank":"Bank","amount":"Amount","remark":"Remark"})
+            st.dataframe(remarks, use_container_width=True, height=220)
 
 st.markdown("---")
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Liquidity Trend
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 st.header("Liquidity Trend")
 if df_fm.empty:
     st.info("No Fund Movement data (need Date + Total Liquidity).")
@@ -468,14 +406,14 @@ else:
     try:
         import plotly.express as px
         fig = px.line(df_fm, x="date", y="total_liquidity", title="Total Liquidity Over Time")
-        fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=360, yaxis_title="")
+        fig.update_layout(margin=dict(l=20,r=20,t=50,b=20), height=360, yaxis_title="")
         st.plotly_chart(fig, use_container_width=True)
     except Exception:
         st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Quick Insights
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 st.header("Quick Insights")
 ins = []
 if not df_by_bank.empty:
@@ -489,10 +427,9 @@ if not df_pay.empty:
 if not df_lc.empty:
     today0 = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
     next4 = today0 + pd.Timedelta(days=3)
-    next4_sum = df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum()
+    next4_sum = df_lc.loc[df_lc['settlement_date'].between(today0, next4),'amount'].sum()
     ins.append(f"Pending LC due in next 4 days: **{fmt_num(next4_sum)}**.")
 if ins:
-    for i in ins:
-        st.markdown(f"- {i}")
+    for i in ins: st.markdown(f"- {i}")
 else:
     st.info("Insights will appear once data is available.")
