@@ -1,5 +1,6 @@
 # app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, Right-Aligned Tables, and Global Font
 # Adds: "After Settlement" amount on Bank Balance cards, a footer, and fixes Styler type-hint crash.
+# Update: detects "Balance After Settlement/Settelment" even if the text sits in row 2 (not a real header).
 
 import io
 import time
@@ -172,16 +173,13 @@ def fmt_number_only(v) -> str:
         return str(v)
 
 def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
-    """
-    Return right-aligned Styler for numeric columns.
-    Keeps numbers numeric (sortable), formats with thousands separators.
-    """
+    """Right-align numeric columns, keep numbers sortable, format with thousands separators."""
     if num_cols is None:
         num_cols = df.select_dtypes(include="number").columns
     fmt = f"{{:,.{decimals}f}}".format
     styler = (df.style
                 .format({col: fmt for col in num_cols})
-                .set_properties(**{"font-family": "var(--app-font)"})  # body font
+                .set_properties(**{"font-family": "var(--app-font)"})
                 .set_properties(subset=num_cols, **{"text-align": "right"})
                 .set_table_styles([{
                     "selector": "th",
@@ -322,14 +320,30 @@ def validate_dataframe(df: pd.DataFrame, required_cols: list, sheet_name: str) -
         st.warning(f"📊 {sheet_name}: Insufficient data rows"); return False
     return True
 
-def _find_after_settlement_col(columns: pd.Index) -> Optional[str]:
-    """Detect an 'After Settlement' column (tolerates 'Settelment' spellings)."""
+def _find_after_settlement_col(columns: pd.Index, df: Optional[pd.DataFrame] = None) -> Optional[str]:
+    """
+    Detect an 'After Settlement' column (tolerates 'Settelment') by:
+    1) checking column headers, then
+    2) scanning the first few data rows for a cell that contains the label.
+    This allows sheets where the text sits in row 2 instead of the header row.
+    """
+    # 1) check headers
     for col in columns:
         c = str(col).strip().lower()
         if "after" in c and ("settle" in c or "settel" in c):
             return col
         if "balance after" in c and ("settle" in c or "settel" in c):
             return col
+
+    # 2) probe top few rows for a label cell
+    if df is not None and not df.empty:
+        try:
+            head = df.head(5).applymap(lambda x: str(x).strip().lower())
+            for col in df.columns:
+                if head[col].str.contains(r"(balance\s*)?after\s*sett(el|le)ment", regex=True, na=False).any():
+                    return col
+        except Exception:
+            pass
     return None
 
 def _find_available_col(columns: pd.Index) -> Optional[str]:
@@ -357,7 +371,7 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         # --- Case A: structured columns present (bank + available/amount + optional after settlement)
         if "bank" in c.columns:
             avail_col = _find_available_col(c.columns)
-            after_col = _find_after_settlement_col(c.columns)
+            after_col = _find_after_settlement_col(c.columns, c)
 
             if avail_col:
                 out = pd.DataFrame({
@@ -395,8 +409,8 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         date_map = {col: pd.to_datetime(col, errors="coerce", dayfirst=False) for col in date_cols}
         latest_col = max(date_cols, key=lambda c: date_map[c])
 
-        # optional 'after settlement'
-        after_col = _find_after_settlement_col(raw.columns)
+        # optional 'after settlement' (now header OR label in top rows)
+        after_col = _find_after_settlement_col(raw.columns, raw)
 
         s = raw[bank_col].astype(str).str.strip()
         mask = s.ne("") & ~s.str.contains("available|total", case=False, na=False)
@@ -557,7 +571,7 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
         _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
         _kpi("ACTIVE BANKS", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
 
-        # Hidden details you asked to remove; kept here commented for reference:
+        # Hidden details (kept commented):
         # if bal_date:
         #     st.markdown("...balance updated tile...")
         # st.markdown("---")
