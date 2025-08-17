@@ -1,5 +1,5 @@
 # app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, and Right-Aligned Tables
-# Major improvements: KPIs and Data Health moved to left sidebar, clean frozen header, right-aligned tables (no SAR prefix) using Pandas Styler, and auto refresh
+# Includes fix for scalar Timestamp .dt usage (uses .days inside loops)
 
 import io
 import time
@@ -53,7 +53,7 @@ st.set_page_config(
     page_icon="💰"
 )
 
-# Minimal CSS (we'll do right alignment via Styler instead)
+# Minimal CSS (alignment handled via Styler)
 st.markdown("""
 <style>
     .main-header { position: sticky; top: 0; background: white; z-index: 999; padding: 15px 0; border-bottom: 2px solid #e6eaf0; margin-bottom: 20px; }
@@ -149,7 +149,7 @@ def fmt_number_only(v) -> str:
 def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> pd.io.formats.style.Styler:
     """
     Return right-aligned Styler for numeric columns.
-    Keeps numbers numeric (sortable), just formats display with thousands separators.
+    Keeps numbers numeric (sortable), formats with thousands separators.
     """
     if num_cols is None:
         num_cols = df.select_dtypes(include="number").columns
@@ -159,6 +159,12 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> pd.io.formats.st
                 .set_properties(subset=num_cols, **{"text-align": "right"})
                 .set_table_styles([{"selector": "th", "props": [("text-align", "right"), ("background-color", "#f8f9fa"), ("font-weight", "600")]}]))
     return styler
+
+def days_until(d, ref):
+    """Scalar-safe days difference."""
+    if pd.isna(d):
+        return np.nan
+    return int((pd.to_datetime(d) - pd.to_datetime(ref)).days)
 
 # ----------------------------
 # Cached CSV fetch
@@ -201,7 +207,7 @@ def read_csv(url: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ----------------------------
-# Display helpers
+# Display helpers (cards / lists / bars / metrics)
 # ----------------------------
 def display_as_list(df, bank_col="bank", amount_col="balance", title="Bank Balances"):
     st.markdown(f"**{title}**")
@@ -468,7 +474,7 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
             f"""
             <div style="font-size:10px;color:#6b7280;line-height:1.4;">
                 <div><strong>📊 Dashboard</strong></div>
-                <div>Version: Enhanced v2.2</div>
+                <div>Version: Enhanced v2.3</div>
                 <div>Cache: {config.CACHE_TTL}s</div>
                 <div>TZ: {config.TZ}</div>
                 <br>
@@ -677,8 +683,9 @@ def main():
                         if row["Days Until Due"] <= 7: return ['background-color: #fef3c7'] * len(row)
                     return [''] * len(row)
 
-                st.dataframe(style_right(show, num_cols=["Amount"]), use_container_width=True, height=400)
-                st.dataframe(show.style.apply(_highlight, axis=1), use_container_width=True, height=1)  # apply row highlight overlay
+                styled = style_right(show, num_cols=["Amount"])
+                styled = styled.apply(_highlight, axis=1)
+                st.dataframe(styled, use_container_width=True, height=400)
 
             elif lc_display == "Progress by Urgency":
                 tmp = lc_view.copy()
@@ -702,12 +709,12 @@ def main():
                 cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                 display_as_mini_cards(cards, "bank", "balance")
 
-            # Quick upcoming alert
-            urgent3 = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
-            if not urgent3.empty:
-                st.warning(f"⚠️ {len(urgent3)} LC(s) due within 3 days!")
-                for _, lc in urgent3.iterrows():
-                    days_left = (lc["settlement_date"] - today0).dt.days
+            # Upcoming deadlines alert (FIXED: use .days, not .dt.days)
+            urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
+            if not urgent_lcs.empty:
+                st.warning(f"⚠️ {len(urgent_lcs)} LC(s) due within 3 days!")
+                for _, lc in urgent_lcs.iterrows():
+                    days_left = (lc["settlement_date"] - today0).days  # FIXED
                     st.write(f"• {lc['bank']} - {fmt_number_only(lc['amount'])} - {days_left} day(s) left")
 
     st.markdown("---")
