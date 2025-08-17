@@ -192,6 +192,14 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
 def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, bal_date):
     """Render both KPI cards and data health status in the left sidebar"""
     with st.sidebar:
+        # Refresh button at the top
+        if st.button("🔄 Refresh All Data", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            logger.info("Manual refresh triggered from sidebar")
+            st.rerun()
+        
+        st.markdown("---")
+        
         # Company Logo/Title
         st.markdown("### 💰 Treasury Dashboard")
         st.markdown("---")
@@ -350,87 +358,26 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
                 unsafe_allow_html=True
             )
         
-        st.markdown("---")
+        # Data Health Status Section - HIDDEN
+        # Uncomment the section below if you want to show data health status
         
-        # Data Health Status Section
-        st.markdown("### 🔍 Data Health")
-        
-        status_items = [
-            ("Bank Balance", data_status.get('bank_balance', 'error')),
-            ("Supplier Payments", data_status.get('supplier_payments', 'error')),
-            ("LC Settlements", data_status.get('settlements', 'error')),
-            ("Fund Movement", data_status.get('fund_movement', 'error'))
-        ]
-        
-        for name, status in status_items:
-            if status == 'success':
-                st.markdown(
-                    f"""
-                    <div style="
-                        display: flex;
-                        align-items: center;
-                        padding: 8px 12px;
-                        margin-bottom: 6px;
-                        background: #dcfce7;
-                        color: #166534;
-                        border-radius: 6px;
-                        font-size: 13px;
-                        font-weight: 500;
-                        border-left: 3px solid #10b981;
-                    ">
-                        ✅ {name}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-            elif status == 'warning':
-                st.markdown(
-                    f"""
-                    <div style="
-                        display: flex;
-                        align-items: center;
-                        padding: 8px 12px;
-                        margin-bottom: 6px;
-                        background: #fef3c7;
-                        color: #92400e;
-                        border-radius: 6px;
-                        font-size: 13px;
-                        font-weight: 500;
-                        border-left: 3px solid #f59e0b;
-                    ">
-                        ⚠️ {name}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    f"""
-                    <div style="
-                        display: flex;
-                        align-items: center;
-                        padding: 8px 12px;
-                        margin-bottom: 6px;
-                        background: #fee2e2;
-                        color: #991b1b;
-                        border-radius: 6px;
-                        font-size: 13px;
-                        font-weight: 500;
-                        border-left: 3px solid #ef4444;
-                    ">
-                        ❌ {name}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-        
-        st.markdown("---")
-        
-        # Refresh button
-        if st.button("🔄 Refresh All Data", type="primary", use_container_width=True):
-            st.cache_data.clear()
-            logger.info("Manual refresh triggered from sidebar")
-            st.rerun()
+        # st.markdown("---")
+        # st.markdown("### 🔍 Data Health")
+        # 
+        # status_items = [
+        #     ("Bank Balance", data_status.get('bank_balance', 'error')),
+        #     ("Supplier Payments", data_status.get('supplier_payments', 'error')),
+        #     ("LC Settlements", data_status.get('settlements', 'error')),
+        #     ("Fund Movement", data_status.get('fund_movement', 'error'))
+        # ]
+        # 
+        # for name, status in status_items:
+        #     if status == 'success':
+        #         st.success(f"✅ {name}")
+        #     elif status == 'warning':
+        #         st.warning(f"⚠️ {name}")
+        #     else:
+        #         st.error(f"❌ {name}")
         
         st.markdown("---")
         
@@ -905,8 +852,8 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
 # Header Section
 # ----------------------------
 def render_header():
-    """Render application header with logo and refresh functionality"""
-    c_logo, c_title, c_refresh = st.columns([0.08, 0.74, 0.18])
+    """Render application header with logo and title"""
+    c_logo, c_title = st.columns([0.08, 0.92])
     
     with c_logo:
         try:
@@ -919,15 +866,8 @@ def render_header():
             f"<h2 style='margin:0;padding-top:6px;display:flex;align-items:center;'>{config.COMPANY_NAME} — Treasury Dashboard</h2>",
             unsafe_allow_html=True
         )
-    
-    with c_refresh:
         current_time = datetime.now().strftime("Last refresh: %Y-%m-%d %H:%M:%S")
         st.caption(current_time)
-        
-        if st.button("🔄 Refresh", type="primary", use_container_width=True):
-            st.cache_data.clear()
-            logger.info("Manual refresh triggered")
-            st.rerun()
 
 # ----------------------------
 # Main Application
