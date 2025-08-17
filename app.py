@@ -1,5 +1,5 @@
-# app.py — Enhanced Treasury Dashboard with Sidebar KPIs and Clean Header
-# Major improvements: KPIs and Data Health moved to left sidebar, clean frozen header, right-aligned tables
+# app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, and Fixed Right-Aligned Tables
+# Major improvements: KPIs and Data Health moved to left sidebar, clean frozen header, right-aligned tables without SAR prefix
 
 import io
 import time
@@ -112,6 +112,18 @@ st.markdown("""
     }
     
     .stDataFrame td {
+        text-align: right !important;
+    }
+    
+    /* Force right alignment for all table content */
+    div[data-testid="stDataFrame"] table th,
+    div[data-testid="stDataFrame"] table td {
+        text-align: right !important;
+    }
+    
+    /* Additional specificity for stubborn tables */
+    .stDataFrame > div > div > div > div > table th,
+    .stDataFrame > div > div > div > div > table td {
         text-align: right !important;
     }
     
@@ -1125,11 +1137,11 @@ def main():
                 # Summary metrics
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Total Amount", fmt_currency(view_data["amount"].sum()))
+                    st.metric("Total Amount", fmt_number_only(view_data["amount"].sum()))
                 with col2:
                     st.metric("Number of Payments", len(view_data))
                 with col3:
-                    st.metric("Average Payment", fmt_currency(view_data["amount"].mean()))
+                    st.metric("Average Payment", fmt_number_only(view_data["amount"].mean()))
 
                 # Bank-wise breakdown
                 grp = view_data.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
@@ -1203,7 +1215,7 @@ def main():
                 # Summary metrics
                 cc1, cc2, cc3 = st.columns(3)
                 with cc1:
-                    st.metric("Total LC Amount", fmt_currency(lc_view["amount"].sum()))
+                    st.metric("Total LC Amount", fmt_number_only(lc_view["amount"].sum()))
                 with cc2:
                     st.metric("Number of LCs", len(lc_view))
                 with cc3:
@@ -1213,7 +1225,7 @@ def main():
                 # LC Table with enhanced formatting
                 viz = lc_view.copy()
                 viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
-                viz["Amount"] = viz["amount"].map(fmt_currency)
+                viz["Amount"] = viz["amount"].map(fmt_number_only)  # Changed from fmt_currency to fmt_number_only
                 viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
 
                 # Rename columns for display, but only if they exist
@@ -1303,7 +1315,7 @@ def main():
                 st.warning(f"⚠️ {len(urgent_lcs)} LC(s) due within 3 days!")
                 for _, lc in urgent_lcs.iterrows():
                     days_left = (lc["settlement_date"] - today0).days
-                    st.write(f"• {lc['bank']} - {fmt_currency(lc['amount'])} - {days_left} day(s) left")
+                    st.write(f"• {lc['bank']} - {fmt_number_only(lc['amount'])} - {days_left} day(s) left")
 
     st.markdown("---")
 
@@ -1361,16 +1373,16 @@ def main():
             
             with col2:
                 st.markdown("### 📊 Liquidity Metrics")
-                st.metric("Current", fmt_currency(latest_liquidity))
+                st.metric("Current", fmt_number_only(latest_liquidity))
                 if len(df_fm) > 1:
                     st.metric("Trend", trend_text)
                 
                 # Liquidity statistics
                 st.markdown("**Statistics (30d)**")
                 recent_data = df_fm.tail(30)
-                st.write(f"**Max:** {fmt_currency(recent_data['total_liquidity'].max())}")
-                st.write(f"**Min:** {fmt_currency(recent_data['total_liquidity'].min())}")
-                st.write(f"**Avg:** {fmt_currency(recent_data['total_liquidity'].mean())}")
+                st.write(f"**Max:** {fmt_number_only(recent_data['total_liquidity'].max())}")
+                st.write(f"**Min:** {fmt_number_only(recent_data['total_liquidity'].min())}")
+                st.write(f"**Avg:** {fmt_number_only(recent_data['total_liquidity'].mean())}")
         
         except Exception as e:
             logger.error(f"Liquidity trend analysis error: {e}")
@@ -1389,7 +1401,7 @@ def main():
         insights.append({
             "type": "info",
             "title": "Top Bank Balance",
-            "content": f"**{top_bank['bank']}** holds the highest balance: {fmt_currency(top_bank['balance'])}"
+            "content": f"**{top_bank['bank']}** holds the highest balance: {fmt_number_only(top_bank['balance'])}"
         })
         
         # Concentration risk
@@ -1408,7 +1420,7 @@ def main():
             insights.append({
                 "type": "warning",
                 "title": "Cash Flow Alert",
-                "content": f"Approved payments ({fmt_currency(total_approved)}) represent {(total_approved/total_balance)*100:.1f}% of available balance."
+                "content": f"Approved payments ({fmt_number_only(total_approved)}) represent {(total_approved/total_balance)*100:.1f}% of available balance."
             })
 
     if not df_lc.empty:
@@ -1417,7 +1429,7 @@ def main():
             insights.append({
                 "type": "error",
                 "title": "Urgent LC Settlements",
-                "content": f"{len(urgent_lcs)} LC settlements due within 7 days totaling {fmt_currency(urgent_lcs['amount'].sum())}"
+                "content": f"{len(urgent_lcs)} LC settlements due within 7 days totaling {fmt_number_only(urgent_lcs['amount'].sum())}"
             })
 
     if not df_fm.empty and len(df_fm) > 5:
