@@ -1,5 +1,5 @@
-# app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, and Right-Aligned Tables
-# Includes fix for scalar Timestamp .dt usage (uses .days inside loops)
+# app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, Right-Aligned Tables, and Global Font
+# Includes fix for scalar Timestamp (.days inside loops) and unified font across the app.
 
 import io
 import time
@@ -53,7 +53,47 @@ st.set_page_config(
     page_icon="💰"
 )
 
-# Minimal CSS (alignment handled via Styler)
+# ---- Global font (one place to change) ----
+APP_FONT = os.getenv("APP_FONT", "Inter")  # e.g., "Inter", "Poppins", "Rubik"
+
+def set_app_font(family: str = APP_FONT):
+    # Load Google Font + force it everywhere in Streamlit (including widgets & tables)
+    css = """
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family={font_q}:wght@300;400;500;600;700;800&display=swap');
+
+      :root {{ --app-font: '{font}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif; }}
+
+      html, body, [class^="css"], [class*=" css"] {{
+        font-family: var(--app-font) !important;
+      }}
+
+      /* Headings, text, labels */
+      h1, h2, h3, h4, h5, h6, p, span, div, label, small, strong, em {{
+        font-family: var(--app-font) !important;
+      }}
+
+      /* Buttons / inputs */
+      button, input, textarea, select {{
+        font-family: var(--app-font) !important;
+      }}
+
+      /* Metrics */
+      div[data-testid="stMetricValue"], div[data-testid="stMetricLabel"] {{
+        font-family: var(--app-font) !important;
+      }}
+
+      /* Dataframe */
+      div[data-testid="stDataFrame"] * {{
+        font-family: var(--app-font) !important;
+      }}
+    </style>
+    """.format(font_q=family.replace(" ", "+"), font=family)
+    st.markdown(css, unsafe_allow_html=True)
+
+set_app_font()
+
+# Minimal CSS for layout bits (alignment handled via Styler)
 st.markdown("""
 <style>
     .main-header { position: sticky; top: 0; background: white; z-index: 999; padding: 15px 0; border-bottom: 2px solid #e6eaf0; margin-bottom: 20px; }
@@ -156,8 +196,15 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> pd.io.formats.st
     fmt = f"{{:,.{decimals}f}}".format
     styler = (df.style
                 .format({col: fmt for col in num_cols})
+                .set_properties(**{"font-family": "var(--app-font)"})  # body font
                 .set_properties(subset=num_cols, **{"text-align": "right"})
-                .set_table_styles([{"selector": "th", "props": [("text-align", "right"), ("background-color", "#f8f9fa"), ("font-weight", "600")]}]))
+                .set_table_styles([{
+                    "selector": "th",
+                    "props": [("text-align", "right"),
+                              ("background-color", "#f8f9fa"),
+                              ("font-weight", "600"),
+                              ("font-family", "var(--app-font)")]
+                }]))
     return styler
 
 def days_until(d, ref):
@@ -474,7 +521,7 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
             f"""
             <div style="font-size:10px;color:#6b7280;line-height:1.4;">
                 <div><strong>📊 Dashboard</strong></div>
-                <div>Version: Enhanced v2.3</div>
+                <div>Version: Enhanced v2.4</div>
                 <div>Cache: {config.CACHE_TTL}s</div>
                 <div>TZ: {config.TZ}</div>
                 <br>
@@ -709,12 +756,12 @@ def main():
                 cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                 display_as_mini_cards(cards, "bank", "balance")
 
-            # Upcoming deadlines alert (FIXED: use .days, not .dt.days)
+            # Upcoming deadlines alert (uses .days, not .dt.days)
             urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
             if not urgent_lcs.empty:
                 st.warning(f"⚠️ {len(urgent_lcs)} LC(s) due within 3 days!")
                 for _, lc in urgent_lcs.iterrows():
-                    days_left = (lc["settlement_date"] - today0).days  # FIXED
+                    days_left = (lc["settlement_date"] - today0).days
                     st.write(f"• {lc['bank']} - {fmt_number_only(lc['amount'])} - {days_left} day(s) left")
 
     st.markdown("---")
@@ -743,6 +790,8 @@ def main():
                     fig.update_layout(title="Total Liquidity Trend", xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
                     fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
                     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+                    # Apply global font to Plotly
+                    fig.update_layout(font=dict(family=APP_FONT, size=14))
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception:
                     st.line_chart(df_fm.set_index("date")["total_liquidity"])
