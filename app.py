@@ -1,5 +1,5 @@
 # app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, Right-Aligned Tables, and Global Font
-# Adds: "After Settlement" amount on Bank Balance cards and a footer "Created By Jaseer Pykkarathodi"
+# Adds: "After Settlement" amount on Bank Balance cards, a footer, and fixes Styler type-hint crash.
 
 import io
 import time
@@ -8,13 +8,19 @@ import os
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from functools import wraps
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# --- Fix for pandas Styler type-hint on some builds ---
+try:
+    from pandas.io.formats.style import Styler
+except Exception:
+    Styler = Any  # fallback so annotations don't crash on import
 
 # ----------------------------
 # Configuration Management
@@ -165,13 +171,17 @@ def fmt_number_only(v) -> str:
     except (ValueError, TypeError):
         return str(v)
 
-def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> pd.io.formats.style.Styler:
+def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
+    """
+    Return right-aligned Styler for numeric columns.
+    Keeps numbers numeric (sortable), formats with thousands separators.
+    """
     if num_cols is None:
         num_cols = df.select_dtypes(include="number").columns
     fmt = f"{{:,.{decimals}f}}".format
     styler = (df.style
                 .format({col: fmt for col in num_cols})
-                .set_properties(**{"font-family": "var(--app-font)"})
+                .set_properties(**{"font-family": "var(--app-font)"})  # body font
                 .set_properties(subset=num_cols, **{"text-align": "right"})
                 .set_table_styles([{
                     "selector": "th",
@@ -183,6 +193,7 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> pd.io.formats.st
     return styler
 
 def days_until(d, ref):
+    """Scalar-safe days difference."""
     if pd.isna(d):
         return np.nan
     return int((pd.to_datetime(d) - pd.to_datetime(ref)).days)
@@ -312,9 +323,7 @@ def validate_dataframe(df: pd.DataFrame, required_cols: list, sheet_name: str) -
     return True
 
 def _find_after_settlement_col(columns: pd.Index) -> Optional[str]:
-    """
-    Try to detect an 'After Settlement' column, tolerant to spelling like 'Settelment'.
-    """
+    """Detect an 'After Settlement' column (tolerates 'Settelment' spellings)."""
     for col in columns:
         c = str(col).strip().lower()
         if "after" in c and ("settle" in c or "settel" in c):
@@ -324,19 +333,15 @@ def _find_after_settlement_col(columns: pd.Index) -> Optional[str]:
     return None
 
 def _find_available_col(columns: pd.Index) -> Optional[str]:
-    """
-    Prefer explicit 'available balance' if present; otherwise fall back to 'amount' columns.
-    """
+    """Prefer 'Available Balance'; fall back to amount/balance-like names."""
     for col in columns:
         c = str(col).strip().lower()
         if "available" in c and "balance" in c:
             return col
-    if "amount" in [str(c).lower() for c in columns]:
-        return "amount"
-    if "amount(sar)" in [str(c).lower() for c in columns]:
-        return "amount(sar)"
-    if "balance" in [str(c).lower() for c in columns]:
-        return "balance"
+    lc = [str(c).lower() for c in columns]
+    if "amount" in lc: return "amount"
+    if "amount(sar)" in lc: return "amount(sar)"
+    if "balance" in lc: return "balance"
     return None
 
 def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetime]]:
@@ -363,7 +368,6 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
                     out["after_settlement"] = c[after_col].map(_to_number)
                 out = out.dropna(subset=["bank"])
                 if validate_dataframe(out, ["bank", "balance"], "Bank Balance"):
-                    # group & sum
                     agg = {"balance": "sum"}
                     if "after_settlement" in out.columns:
                         agg["after_settlement"] = "sum"
@@ -553,11 +557,11 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
         _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
         _kpi("ACTIVE BANKS", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
 
-        # Hidden details as requested earlier (badge & footer) – keep commented:
+        # Hidden details you asked to remove; kept here commented for reference:
         # if bal_date:
-        #     st.markdown(...)
+        #     st.markdown("...balance updated tile...")
         # st.markdown("---")
-        # st.markdown(...)
+        # st.markdown("...sources block...")
 
 # ----------------------------
 # Main
