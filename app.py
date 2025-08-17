@@ -1,5 +1,5 @@
 # app.py — Enhanced Treasury Dashboard with Sidebar KPIs and Clean Header
-# Major improvements: KPIs and Data Health moved to left sidebar, clean frozen header
+# Major improvements: KPIs and Data Health moved to left sidebar, clean frozen header, right-aligned tables
 
 import io
 import time
@@ -98,6 +98,21 @@ st.markdown("""
         margin: 0 !important;
         padding: 0 !important;
         line-height: 1.2 !important;
+    }
+    
+    /* Right-aligned tables */
+    .stDataFrame table {
+        text-align: right !important;
+    }
+    
+    .stDataFrame th {
+        text-align: right !important;
+        background-color: #f8f9fa !important;
+        font-weight: 600 !important;
+    }
+    
+    .stDataFrame td {
+        text-align: right !important;
     }
     
     /* Table Alternatives Styling */
@@ -542,6 +557,15 @@ def fmt_currency_aligned(v, currency="SAR") -> str:
         # Add extra spaces to push the text to the right
         formatted = f"{currency} {float(v):,.0f}"
         return f"{'':>20}{formatted}"  # Right-pad with spaces
+    except (ValueError, TypeError):
+        return str(v)
+
+def fmt_number_only(v) -> str:
+    """Format number without currency prefix"""
+    try:
+        if pd.isna(v):
+            return "N/A"
+        return f"{float(v):,.0f}"
     except (ValueError, TypeError):
         return str(v)
 
@@ -1058,8 +1082,8 @@ def main():
         
         else:  # Table view
             df_bal_table = df_bal_view[["bank", "balance"]].rename(columns={"bank": "Bank", "balance": "Balance"})
-            # Use right-aligned currency formatting
-            df_bal_table["Balance"] = df_bal_table["Balance"].map(lambda x: f"{fmt_currency(x):>20}")
+            # Use number-only formatting without SAR prefix
+            df_bal_table["Balance"] = df_bal_table["Balance"].map(fmt_number_only)
             
             st.dataframe(
                 df_bal_table, 
@@ -1111,7 +1135,7 @@ def main():
                 grp = view_data.groupby("bank", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
                 st.markdown("**📊 Summary by Bank**")
                 grp2 = grp.rename(columns={"bank": "Bank", "amount": "Amount"}).copy()
-                grp2["Amount"] = grp2["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
+                grp2["Amount"] = grp2["Amount"].map(fmt_number_only)
                 
                 st.dataframe(grp2, use_container_width=True, height=220, hide_index=True)
 
@@ -1121,7 +1145,7 @@ def main():
                     "bank": "Bank", "supplier": "Supplier", "currency": "Currency", 
                     "amount": "Amount", "status": "Status"
                 }).copy()
-                v["Amount"] = v["Amount"].map(lambda x: f"{fmt_currency(x):>20}")
+                v["Amount"] = v["Amount"].map(fmt_number_only)
                 
                 st.dataframe(v, use_container_width=True, height=360, hide_index=True)
             
