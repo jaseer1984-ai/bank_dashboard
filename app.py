@@ -498,18 +498,31 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     try:
-        d = cols_lower(df).rename(columns={"supplier name": "supplier", "amount(sar)": "amount_sar", "order/sh/branch": "order_branch"})
+        d = cols_lower(df).rename(columns={
+            "supplier name": "supplier",
+            "amount(sar)": "amount_sar",
+            "order/sh/branch": "order_branch"
+        })
         if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
             return pd.DataFrame()
-        status_norm = d["status"].astype(str).str.strip().str.lower()
-        d = d.loc[status_norm.str_contains("approved", na=False)].copy()
-        if d.empty:
-            logger.info("No approved payments found"); return pd.DataFrame()
+
+        # normalize and filter APPROVED rows
+        status_norm = d["status"].astype("string").str.strip().str.lower()
+        mask = status_norm.str.contains(r"\bapproved\b", na=False)
+        if not mask.any():
+            logger.info("No approved payments found")
+            return pd.DataFrame()
+        d = d.loc[mask].copy()
+
+        # pick amount column and clean numbers
         amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
         if not amt_col:
-            logger.error("No amount column found in supplier payments"); return pd.DataFrame()
+            logger.error("No amount column found in supplier payments")
+            return pd.DataFrame()
+
         d["amount"] = d[amt_col].map(_to_number)
         d["bank"] = d["bank"].astype(str).str.strip()
+
         keep = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in d.columns]
         out = d[keep].dropna(subset=["amount"]).copy()
         if "status" in out.columns:
@@ -937,3 +950,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
