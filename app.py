@@ -1,11 +1,11 @@
 # app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, Right-Aligned Tables, and Global Font
-# Adds: "After Settlement" amount on Bank Balance cards, a footer, and fixes Styler type-hint crash.
-# Update: detects "Balance After Settlement/Settelment" even if the text sits in row 2 (not a real header).
+# Adds: robust negative parsing, light-red cards for negative balances, "After Settlement" detection, footer, and Styler type-hint fix.
 
 import io
 import time
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from functools import wraps
@@ -29,7 +29,7 @@ except Exception:
 @dataclass
 class Config:
     FILE_ID: str = os.getenv('GOOGLE_SHEETS_ID', '1371amvaCbejUWVJI_moWdIchy5DF1lPO')
-    COMPANY_NAME: str = os.getenv('COMPANY_NAME', 'Isam Kabbani & Partners – Unitech')
+    COMPANY_NAME: str = os.getenv('COMPANY_NAME', 'Issam Kabbani & Partners – Unitech')
     LOGO_PATH: str = os.getenv('LOGO_PATH', 'ikk_logo.png')
     CACHE_TTL: int = int(os.getenv('CACHE_TTL', '300'))
     TZ: str = os.getenv('TIMEZONE', 'Asia/Riyadh')
@@ -138,18 +138,36 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
 # Helpers: parsing + formatting
 # ----------------------------
 def _to_number(x) -> float:
+    """Parse numbers like '(1,234)', '1,234-', 'SAR -1,234', or with Unicode minus."""
     if pd.isna(x) or x == '':
         return np.nan
-    s = str(x).strip().replace(",", "")
-    if s.endswith("%"):
-        s = s[:-1]
+    if isinstance(x, (int, float, np.number)):
+        num = float(x)
+        return num if abs(num) <= 1e12 else np.nan
+
+    s = str(x).strip()
+
+    # Normalize unicode minus and remove thousands commas
+    s = s.replace('\u2212', '-')  # unicode minus → ascii
+    s = s.replace(',', '')
+
+    # Strip percent
+    if s.endswith('%'):
+        s = s[:-1].strip()
+
+    # Accounting formats
+    if s.startswith('(') and s.endswith(')'):
+        s = '-' + s[1:-1].strip()
+    if s.endswith('-'):
+        s = '-' + s[:-1].strip()
+
+    # Remove currency/words; keep digits, dot, minus
+    s = re.sub(r'[^0-9.\-]', '', s)
+
     try:
         num = float(s)
-        if abs(num) > 1e12:
-            logger.warning(f"Unusually large number detected: {num}")
-            return np.nan
-        return num
-    except (ValueError, OverflowError) as e:
+        return num if abs(num) <= 1e12 else np.nan
+    except Exception as e:
         logger.debug(f"Number conversion failed for '{x}': {e}")
         return np.nan
 
@@ -267,9 +285,10 @@ def display_as_mini_cards(df, bank_col="bank", amount_col="balance"):
             )
 
 def display_as_progress_bars(df, bank_col="bank", amount_col="balance"):
-    max_amount = df[amount_col].max()
+    # Use absolute values to avoid negative CSS widths
+    max_amount = df[amount_col].abs().max()
     for _, row in df.iterrows():
-        percentage = (row[amount_col] / max_amount) * 100 if max_amount > 0 else 0
+        percentage = (abs(row[amount_col]) / max_amount) * 100 if max_amount > 0 else 0
         st.markdown(
             f"""
             <div style="margin-bottom:16px;">
@@ -291,17 +310,17 @@ def display_as_metrics(df, bank_col="bank", amount_col="balance"):
         if i < 4:
             with cols[i]:
                 amount = row[amount_col]
-                if amount >= 1_000_000:
-                    display_amount = f"{amount/1_000_000:.1f}M"
-                elif amount >= 1_000:
-                    display_amount = f"{amount/1_000:.0f}K"
+                if abs(amount) >= 1_000_000:
+                    display_amount = f"{abs(amount)/1_000_000:.1f}M"
+                elif abs(amount) >= 1_000:
+                    display_amount = f"{abs(amount)/1_000:.0f}K"
                 else:
-                    display_amount = f"{amount:.0f}"
+                    display_amount = f"{abs(amount):.0f}"
                 st.markdown(
                     f"""
                     <div style="text-align:center;padding:20px;background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border-radius:12px;border:2px solid #f59e0b;margin-bottom:12px;">
                         <div style="font-size:12px;color:#92400e;font-weight:600;margin-bottom:8px;">{row[bank_col]}</div>
-                        <div style="font-size:20px;font-weight:800;color:#92400e;">{display_amount}</div>
+                        <div style="font-size:20px;font-weight:800;color:#92400e;">{display_amount}{' (−)' if amount < 0 else ''}</div>
                     </div>
                     """,
                     unsafe_allow_html=True
@@ -321,21 +340,14 @@ def validate_dataframe(df: pd.DataFrame, required_cols: list, sheet_name: str) -
     return True
 
 def _find_after_settlement_col(columns: pd.Index, df: Optional[pd.DataFrame] = None) -> Optional[str]:
-    """
-    Detect an 'After Settlement' column (tolerates 'Settelment') by:
-    1) checking column headers, then
-    2) scanning the first few data rows for a cell that contains the label.
-    This allows sheets where the text sits in row 2 instead of the header row.
-    """
-    # 1) check headers
+    # 1) headers
     for col in columns:
         c = str(col).strip().lower()
         if "after" in c and ("settle" in c or "settel" in c):
             return col
         if "balance after" in c and ("settle" in c or "settel" in c):
             return col
-
-    # 2) probe top few rows for a label cell
+    # 2) top few rows
     if df is not None and not df.empty:
         try:
             head = df.head(5).applymap(lambda x: str(x).strip().lower())
@@ -347,7 +359,6 @@ def _find_after_settlement_col(columns: pd.Index, df: Optional[pd.DataFrame] = N
     return None
 
 def _find_available_col(columns: pd.Index) -> Optional[str]:
-    """Prefer 'Available Balance'; fall back to amount/balance-like names."""
     for col in columns:
         c = str(col).strip().lower()
         if "available" in c and "balance" in c:
@@ -363,12 +374,12 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
     Returns DataFrame with columns:
       - bank
       - balance  (available)
-      - after_settlement (optional if column exists)
+      - after_settlement (optional)
     """
     try:
         c = cols_lower(df)
 
-        # --- Case A: structured columns present (bank + available/amount + optional after settlement)
+        # --- Case A: structured columns present
         if "bank" in c.columns:
             avail_col = _find_available_col(c.columns)
             after_col = _find_after_settlement_col(c.columns, c)
@@ -380,7 +391,11 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
                 })
                 if after_col:
                     out["after_settlement"] = c[after_col].map(_to_number)
+
+                # drop NaNs so sums aren't 0 from all-NaN
                 out = out.dropna(subset=["bank"])
+                out = out.dropna(subset=["balance"])
+
                 if validate_dataframe(out, ["bank", "balance"], "Bank Balance"):
                     agg = {"balance": "sum"}
                     if "after_settlement" in out.columns:
@@ -388,10 +403,10 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
                     by_bank = out.groupby("bank", as_index=False).agg(agg)
                     return by_bank, datetime.now()
 
-        # --- Case B: legacy layout with date column + separate 'after settlement' column
+        # --- Case B: legacy layout with date column + optional after column
         raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
 
-        # find bank col
+        # bank col
         bank_col = None
         for col in raw.columns:
             if raw[col].dtype == object:
@@ -401,7 +416,7 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         if bank_col is None:
             raise ValueError("Could not detect bank column")
 
-        # find the latest date column for 'available'
+        # latest date column
         parsed = pd.to_datetime(pd.Index(raw.columns), errors="coerce", dayfirst=False)
         date_cols = [col for col, d in zip(raw.columns, parsed) if pd.notna(d)]
         if not date_cols:
@@ -409,7 +424,7 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         date_map = {col: pd.to_datetime(col, errors="coerce", dayfirst=False) for col in date_cols}
         latest_col = max(date_cols, key=lambda c: date_map[c])
 
-        # optional 'after settlement' (now header OR label in top rows)
+        # optional 'after settlement'
         after_col = _find_after_settlement_col(raw.columns, raw)
 
         s = raw[bank_col].astype(str).str.strip()
@@ -422,16 +437,19 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
             rename_map[after_col] = "after_settlement"
         sub = sub.rename(columns=rename_map)
 
-        sub["balance"] = sub["balance"].astype(str).str.replace(",", "", regex=False).map(_to_number)
+        sub["balance"] = sub["balance"].map(_to_number)
         sub["bank"] = sub["bank"].str.replace(r"\s*-\s*.*$", "", regex=True).str.strip()
         if after_col:
-            sub["after_settlement"] = sub["after_settlement"].astype(str).str.replace(",", "", regex=False).map(_to_number)
+            sub["after_settlement"] = sub["after_settlement"].map(_to_number)
+
+        # drop NaN balances before grouping
+        sub = sub.dropna(subset=["balance"])
 
         latest_date = date_map[latest_col]
         agg = {"balance": "sum"}
         if after_col:
             agg["after_settlement"] = "sum"
-        by_bank = sub.dropna(subset=["bank"]).groupby("bank", as_index=False).agg(agg)
+        by_bank = sub.groupby("bank", as_index=False).agg(agg)
 
         if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
             return by_bank, latest_date
@@ -561,7 +579,7 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
                 f"""
                 <div style="background:{bg};border:1px solid {border};border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 6px rgba(0,0,0,.04);">
                     <div style="font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{title}</div>
-                    <div style="font-size:20px;font-weight:800;color:{color};text-align:right;">{(f"{float(value):,.0f}" if value else "N/A")}</div>
+                    <div style="font-size:20px;font-weight:800;color:{color};text-align:right;">{(f"{float(value):,.0f}" if value or value==0 else "N/A")}</div>
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -655,10 +673,19 @@ def main():
                 with cols[int(i) % 4]:
                     bal = row.get('balance', np.nan)
                     after = row.get('after_settlement', np.nan)
-                    if bal > 500_000: bg, icon = "#e0e7ff", "💎"
-                    elif bal > 100_000: bg, icon = "#fce7f3", "🔹"
-                    elif bal > 50_000: bg, icon = "#e0f2fe", "💠"
-                    else: bg, icon = "#ecfdf5", "💚"
+
+                    # Light-red card for negatives, otherwise your normal palette
+                    if pd.notna(bal) and bal < 0:
+                        bg, icon = "#fee2e2", "🔻"  # soft red
+                    elif bal > 500_000:
+                        bg, icon = "#e0e7ff", "💎"
+                    elif bal > 100_000:
+                        bg, icon = "#fce7f3", "🔹"
+                    elif bal > 50_000:
+                        bg, icon = "#e0f2fe", "💠"
+                    else:
+                        bg, icon = "#ecfdf5", "💚"
+
                     after_html = (
                         f'<div style="font-size:14px;font-weight:700;color:#334155;text-align:right;margin-top:8px;">'
                         f'After Settlement: {fmt_currency(after)}</div>'
@@ -908,4 +935,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
