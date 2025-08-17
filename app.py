@@ -507,34 +507,38 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
         _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
         _kpi("ACTIVE BANKS", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
 
-        if bal_date:
-            st.markdown(
-                f"""
-                <div style="font-size:10px;color:#6b7280;text-align:center;margin-bottom:20px;padding:8px;background:#f9fafb;border-radius:6px;">
-                    💡 Balance updated: {bal_date.strftime('%Y-%m-%d at %H:%M')}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        st.markdown("---")
-        st.markdown(
-            f"""
-            <div style="font-size:10px;color:#6b7280;line-height:1.4;">
-                <div><strong>📊 Dashboard</strong></div>
-                <div>Version: Enhanced v2.4</div>
-                <div>Cache: {config.CACHE_TTL}s</div>
-                <div>TZ: {config.TZ}</div>
-                <br>
-                <div><strong>📈 Sources</strong></div>
-                <div>Active: {sum(1 for status in data_status.values() if status == 'success')}/4</div>
-                <div>Refresh: {datetime.now().strftime('%H:%M:%S')}</div>
-                <br>
-                <div><strong>🏗️ By</strong></div>
-                <div>Jaseer Pykarathodi</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        # 🔕 Hidden per your request:
+        # (Balance updated badge)
+        # if bal_date:
+        #     st.markdown(
+        #         f"""
+        #         <div style="font-size:10px;color:#6b7280;text-align:center;margin-bottom:20px;padding:8px;background:#f9fafb;border-radius:6px;">
+        #             💡 Balance updated: {bal_date.strftime('%Y-%m-%d at %H:%M')}
+        #         </div>
+        #         """,
+        #         unsafe_allow_html=True
+        #     )
+
+        # st.markdown("---")
+        # (Dashboard/Sources footer block)
+        # st.markdown(
+        #     f"""
+        #     <div style="font-size:10px;color:#6b7280;line-height:1.4;">
+        #         <div><strong>📊 Dashboard</strong></div>
+        #         <div>Version: Enhanced v2.4</div>
+        #         <div>Cache: {config.CACHE_TTL}s</div>
+        #         <div>TZ: {config.TZ}</div>
+        #         <br>
+        #         <div><strong>📈 Sources</strong></div>
+        #         <div>Active: {sum(1 for status in data_status.values() if status == 'success')}/4</div>
+        #         <div>Refresh: {datetime.now().strftime('%H:%M:%S')}</div>
+        #         <br>
+        #         <div><strong>🏗️ By</strong></div>
+        #         <div>Jaseer Pykarathodi</div>
+        #     </div>
+        #     """,
+        #     unsafe_allow_html=True
+        # )
 
 # ----------------------------
 # Main
