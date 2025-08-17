@@ -78,6 +78,28 @@ st.markdown("""
     .status-warning { background-color: #f59e0b; }
     .status-error { background-color: #ef4444; }
     
+    /* Sticky Header */
+    .main-header {
+        position: sticky;
+        top: 0;
+        background: white;
+        z-index: 999;
+        padding: 15px 0;
+        border-bottom: 2px solid #e6eaf0;
+        margin-bottom: 20px;
+    }
+    
+    .main-header h1 {
+        font-size: 28px !important;
+        font-weight: 900 !important;
+        color: #1a202c !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.5px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 1.2 !important;
+    }
+    
     /* Table Alternatives Styling */
     .list-item {
         display: flex;
@@ -852,7 +874,10 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
 # Header Section
 # ----------------------------
 def render_header():
-    """Render application header with logo and title"""
+    """Render application header with logo and title - sticky/frozen"""
+    # Create sticky header container
+    st.markdown('<div class="main-header">', unsafe_allow_html=True)
+    
     c_logo, c_title = st.columns([0.08, 0.92])
     
     with c_logo:
@@ -862,12 +887,17 @@ def render_header():
             st.markdown("💰", help="Logo not found")
     
     with c_title:
+        # Convert company name to uppercase and make it bold with custom styling
+        company_name_upper = config.COMPANY_NAME.upper()
         st.markdown(
-            f"<h2 style='margin:0;padding-top:6px;display:flex;align-items:center;'>{config.COMPANY_NAME} — Treasury Dashboard</h2>",
+            f'<h1 class="main-header h1">{company_name_upper}</h1>',
             unsafe_allow_html=True
         )
         current_time = datetime.now().strftime("Last refresh: %Y-%m-%d %H:%M:%S")
         st.caption(current_time)
+    
+    # Close sticky header container
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ----------------------------
 # Main Application
