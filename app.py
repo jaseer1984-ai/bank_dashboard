@@ -1,6 +1,5 @@
-# app.py — Enhanced Treasury Dashboard with Table Alternatives
-# Major improvements: Better error handling, configuration management, performance optimization,
-# data validation, security enhancements, modern UI alternatives, and new features
+# app.py — Enhanced Treasury Dashboard with Sidebar KPIs and Health Status
+# Major improvements: KPIs and Data Health moved to left sidebar for better space utilization
 
 import io
 import time
@@ -54,7 +53,7 @@ logger = logging.getLogger(__name__)
 st.set_page_config(
     page_title="Treasury Dashboard", 
     layout="wide", 
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",  # Changed to show sidebar by default
     page_icon="💰"
 )
 
@@ -126,6 +125,11 @@ st.markdown("""
         border-radius: 4px;
         transition: width 0.3s ease;
     }
+    
+    /* Sidebar customization */
+    .sidebar .sidebar-content {
+        padding-top: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -183,40 +187,276 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
     return decorator
 
 # ----------------------------
+# Enhanced Sidebar Function
+# ----------------------------
+def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, bal_date):
+    """Render both KPI cards and data health status in the left sidebar"""
+    with st.sidebar:
+        # Company Logo/Title
+        st.markdown("### 💰 Treasury Dashboard")
+        st.markdown("---")
+        
+        # KPI Cards Section
+        st.markdown("### 📊 Key Metrics")
+        
+        # Total Balance KPI
+        st.markdown(
+            f"""
+            <div style="
+                background: #EEF2FF;
+                border: 1px solid #C7D2FE;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 12px;
+                box-shadow: 0 1px 6px rgba(0,0,0,.04);
+            ">
+                <div style="
+                    font-size: 11px;
+                    color: #374151;
+                    text-transform: uppercase;
+                    letter-spacing: .08em;
+                    margin-bottom: 6px;
+                ">
+                    TOTAL BALANCE
+                </div>
+                <div style="
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: #1E3A8A;
+                    text-align: right;
+                ">
+                    {f"{float(total_balance):,.0f}" if total_balance else "N/A"}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Approved Payments KPI
+        st.markdown(
+            f"""
+            <div style="
+                background: #E9FFF2;
+                border: 1px solid #C7F7DD;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 12px;
+                box-shadow: 0 1px 6px rgba(0,0,0,.04);
+            ">
+                <div style="
+                    font-size: 11px;
+                    color: #374151;
+                    text-transform: uppercase;
+                    letter-spacing: .08em;
+                    margin-bottom: 6px;
+                ">
+                    APPROVED PAYMENTS
+                </div>
+                <div style="
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: #065F46;
+                    text-align: right;
+                ">
+                    {f"{float(approved_sum):,.0f}" if approved_sum else "N/A"}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # LC Due KPI
+        st.markdown(
+            f"""
+            <div style="
+                background: #FFF7E6;
+                border: 1px solid #FDE9C8;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 12px;
+                box-shadow: 0 1px 6px rgba(0,0,0,.04);
+            ">
+                <div style="
+                    font-size: 11px;
+                    color: #374151;
+                    text-transform: uppercase;
+                    letter-spacing: .08em;
+                    margin-bottom: 6px;
+                ">
+                    LC DUE (NEXT 4 DAYS)
+                </div>
+                <div style="
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: #92400E;
+                    text-align: right;
+                ">
+                    {f"{float(lc_next4_sum):,.0f}" if lc_next4_sum else "N/A"}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Active Banks KPI
+        st.markdown(
+            f"""
+            <div style="
+                background: #FFF1F2;
+                border: 1px solid #FBD5D8;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 16px;
+                box-shadow: 0 1px 6px rgba(0,0,0,.04);
+            ">
+                <div style="
+                    font-size: 11px;
+                    color: #374151;
+                    text-transform: uppercase;
+                    letter-spacing: .08em;
+                    margin-bottom: 6px;
+                ">
+                    ACTIVE BANKS
+                </div>
+                <div style="
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: #9F1239;
+                    text-align: right;
+                ">
+                    {int(banks_cnt) if banks_cnt else "N/A"}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Data freshness info
+        if bal_date:
+            st.markdown(
+                f"""
+                <div style="
+                    font-size: 10px;
+                    color: #6b7280;
+                    text-align: center;
+                    margin-bottom: 20px;
+                    padding: 8px;
+                    background: #f9fafb;
+                    border-radius: 6px;
+                ">
+                    💡 Balance updated: {bal_date.strftime('%Y-%m-%d at %H:%M')}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        
+        st.markdown("---")
+        
+        # Data Health Status Section
+        st.markdown("### 🔍 Data Health")
+        
+        status_items = [
+            ("Bank Balance", data_status.get('bank_balance', 'error')),
+            ("Supplier Payments", data_status.get('supplier_payments', 'error')),
+            ("LC Settlements", data_status.get('settlements', 'error')),
+            ("Fund Movement", data_status.get('fund_movement', 'error'))
+        ]
+        
+        for name, status in status_items:
+            if status == 'success':
+                st.markdown(
+                    f"""
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 12px;
+                        margin-bottom: 6px;
+                        background: #dcfce7;
+                        color: #166534;
+                        border-radius: 6px;
+                        font-size: 13px;
+                        font-weight: 500;
+                        border-left: 3px solid #10b981;
+                    ">
+                        ✅ {name}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            elif status == 'warning':
+                st.markdown(
+                    f"""
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 12px;
+                        margin-bottom: 6px;
+                        background: #fef3c7;
+                        color: #92400e;
+                        border-radius: 6px;
+                        font-size: 13px;
+                        font-weight: 500;
+                        border-left: 3px solid #f59e0b;
+                    ">
+                        ⚠️ {name}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f"""
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 12px;
+                        margin-bottom: 6px;
+                        background: #fee2e2;
+                        color: #991b1b;
+                        border-radius: 6px;
+                        font-size: 13px;
+                        font-weight: 500;
+                        border-left: 3px solid #ef4444;
+                    ">
+                        ❌ {name}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        
+        st.markdown("---")
+        
+        # Refresh button
+        if st.button("🔄 Refresh All Data", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            logger.info("Manual refresh triggered from sidebar")
+            st.rerun()
+        
+        st.markdown("---")
+        
+        # Footer info (compact)
+        st.markdown(
+            f"""
+            <div style="font-size: 10px; color: #6b7280; line-height: 1.4;">
+                <div><strong>📊 Dashboard</strong></div>
+                <div>Version: Enhanced v2.0</div>
+                <div>Cache: {config.CACHE_TTL}s</div>
+                <div>TZ: {config.TZ}</div>
+                <br>
+                <div><strong>📈 Sources</strong></div>
+                <div>Active: {sum(1 for status in data_status.values() if status == 'success')}/4</div>
+                <div>Refresh: {datetime.now().strftime('%H:%M:%S')}</div>
+                <br>
+                <div><strong>🏗️ By</strong></div>
+                <div>Jaseer Pykarathodi</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+# ----------------------------
 # Enhanced Helper Functions
 # ----------------------------
-def simple_kpi_card(title, value, bg="#EEF2FF", border="#C7D2FE", text="#111827"):
-    """Ultra-simple KPI card to avoid any naming conflicts"""
-    try:
-        # Simple number formatting
-        if pd.isna(value) or value is None:
-            display_value = "N/A"
-        elif isinstance(value, (int, float)):
-            display_value = f"{float(value):,.0f}"
-        else:
-            display_value = str(value)
-        
-        card_html = f"""
-        <div style="
-            background:{bg};
-            border:1px solid {border};
-            border-radius:12px;
-            padding:14px 16px;
-            box-shadow:0 1px 6px rgba(0,0,0,.04);">
-            <div style="font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em">
-                {title}
-            </div>
-            <div style="font-size:28px;font-weight:800;color:{text};margin-top:4px;text-align:right;direction:ltr;">
-                {display_value}
-            </div>
-        </div>
-        """
-        
-        st.markdown(card_html, unsafe_allow_html=True)
-        
-    except Exception as e:
-        st.error(f"Card error for {title}: {str(e)}")
-
 def _to_number(x) -> float:
     """Enhanced number conversion with validation and bounds checking"""
     if pd.isna(x) or x == '':
@@ -437,7 +677,7 @@ def display_as_metrics(df, bank_col="bank", amount_col="balance"):
                 )
 
 # ----------------------------
-# Parser Functions (same as before)
+# Parser Functions
 # ----------------------------
 def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetime]]:
     """Enhanced bank balance parser with better error handling"""
@@ -693,7 +933,7 @@ def render_header():
 # Main Application
 # ----------------------------
 def main():
-    """Main application function"""
+    """Main application function with enhanced sidebar"""
     render_header()
     st.markdown("")
     
@@ -767,59 +1007,8 @@ def main():
     except Exception:
         approved_sum = 0.0
     
-    # Display KPIs with simple cards - using try/catch for each
-    k1, k2, k3, k4 = st.columns(4)
-    
-    with k1:
-        try:
-            simple_kpi_card("Total Balance", total_balance, "#E6F0FF", "#C7D8FE", "#1E3A8A")
-        except Exception as e:
-            st.error(f"KPI 1 Error: {e}")
-            
-    with k2:
-        try:
-            simple_kpi_card("Approved Payments", approved_sum, "#E9FFF2", "#C7F7DD", "#065F46")
-        except Exception as e:
-            st.error(f"KPI 2 Error: {e}")
-            
-    with k3:
-        try:
-            simple_kpi_card("LC due (next 4 days)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
-        except Exception as e:
-            st.error(f"KPI 3 Error: {e}")
-            
-    with k4:
-        try:
-            simple_kpi_card("Active Banks", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
-        except Exception as e:
-            st.error(f"KPI 4 Error: {e}")
-    
-    # Add data freshness info below KPIs
-    if bal_date:
-        st.caption(f"💡 Bank balance data last updated: {bal_date.strftime('%Y-%m-%d at %H:%M')}")
-    
-    # Data Health Dashboard
-    st.markdown("---")
-    st.subheader("📊 Data Health Status")
-    
-    status_cols = st.columns(4)
-    status_items = [
-        ("Bank Balance", data_status.get('bank_balance', 'error')),
-        ("Supplier Payments", data_status.get('supplier_payments', 'error')),
-        ("LC Settlements", data_status.get('settlements', 'error')),
-        ("Fund Movement", data_status.get('fund_movement', 'error'))
-    ]
-    
-    for i, (name, status) in enumerate(status_items):
-        with status_cols[i]:
-            if status == 'success':
-                st.success(f"✅ {name}")
-            elif status == 'warning':
-                st.warning(f"⚠️ {name}")
-            else:
-                st.error(f"❌ {name}")
-    
-    st.markdown("---")
+    # Render enhanced sidebar with KPIs and health status
+    render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, bal_date)
     
     # Bank Balance Section with Multiple View Options
     st.header("🏦 Bank Balance")
@@ -1020,12 +1209,12 @@ def main():
                 # Summary metrics
                 cc1, cc2, cc3 = st.columns(3)
                 with cc1:
-                    simple_kpi_card("Total LC Amount", lc_view["amount"].sum(), "#FFF7E6", "#FDE9C8", "#92400E")
+                    st.metric("Total LC Amount", fmt_currency(lc_view["amount"].sum()))
                 with cc2:
-                    simple_kpi_card("Number of LCs", len(lc_view), "#E6F0FF", "#C7D8FE", "#1E3A8A")
+                    st.metric("Number of LCs", len(lc_view))
                 with cc3:
                     urgent_count = len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)])
-                    simple_kpi_card("Urgent (2 days)", urgent_count, "#FEE2E2", "#FECACA", "#991B1B")
+                    st.metric("Urgent (2 days)", urgent_count)
 
                 # LC Table with enhanced formatting
                 viz = lc_view.copy()
@@ -1178,9 +1367,9 @@ def main():
             
             with col2:
                 st.markdown("### 📊 Liquidity Metrics")
-                simple_kpi_card("Current", latest_liquidity, "#E6F0FF", "#C7D8FE", "#1E3A8A")
+                st.metric("Current", fmt_currency(latest_liquidity))
                 if len(df_fm) > 1:
-                    simple_kpi_card("Trend", trend_text, "#F0FDF4", "#BBF7D0", "#065F46")
+                    st.metric("Trend", trend_text)
                 
                 # Liquidity statistics
                 st.markdown("**Statistics (30d)**")
@@ -1257,26 +1446,6 @@ def main():
                 st.error(f"🚨 **{insight['title']}**: {insight['content']}")
     else:
         st.info("💡 Insights will appear as data becomes available and patterns emerge.")
-
-    # Footer with enhanced information
-    st.markdown("---")
-    footer_col1, footer_col2, footer_col3 = st.columns(3)
-    
-    with footer_col1:
-        st.markdown("**📊 Dashboard Info**")
-        st.caption(f"Timezone: {config.TZ}")
-        st.caption(f"Cache TTL: {config.CACHE_TTL}s")
-        st.caption(f"Version: Enhanced v2.0")
-    
-    with footer_col2:
-        st.markdown("**📈 Data Sources**")
-        successful_sources = sum(1 for status in data_status.values() if status == 'success')
-        st.caption(f"Active Sources: {successful_sources}/4")
-        st.caption(f"Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
-    
-    with footer_col3:
-        st.markdown("**🏗️ Created By**")
-        st.caption("**Jaseer Pykarathodi**")
 
 if __name__ == "__main__":
     main()
