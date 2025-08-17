@@ -1,7 +1,7 @@
-# app.py — Enhanced Treasury Dashboard
-# Negative-safe parsing, red styling for negatives, projected balance on cards,
-# extra insights, theme config, auto-refresh, right-aligned tables, global font,
-# "After Settlement" support, and no fallback emoji/icons when logo missing.
+# app.py — Treasury Dashboard
+# Always show: Available Balance + Balance After Settlement (no "Projected").
+# Negative-safe parsing, red font for negatives, light-red card bg if any value is negative.
+# Global font, right-aligned tables, auto-refresh, logo fallback hidden, footer.
 
 import io
 import time
@@ -48,7 +48,7 @@ THEME = {
         "text_dark": "#1e293b",
         "text_negative": "#B91C1C",
         "after_label": "#334155",
-        "light_red": "#FFE4E6",  # background for negative projected
+        "light_red": "#FFE4E6",  # background for any negative
         "lavender": "#e0e7ff",
         "pink": "#fce7f3",
         "sky": "#e0f2fe",
@@ -61,13 +61,14 @@ THEME = {
         "low": "💚",
         "negative": "🔻",
     },
-    # Use PROJECTED balance to pick card color; if no projected, use available
+    # Choose by available first; if after-settlement exists and is negative, use negative style.
     "card_rules": [
-        {"when": lambda v: (v is not None) and (float(v) < 0),       "bg": "light_red", "icon": "negative"},
-        {"when": lambda v: (v is not None) and (float(v) > 500_000), "bg": "lavender",  "icon": "very_high"},
-        {"when": lambda v: (v is not None) and (float(v) > 100_000), "bg": "pink",      "icon": "high"},
-        {"when": lambda v: (v is not None) and (float(v) > 50_000),  "bg": "sky",       "icon": "medium"},
-        {"when": lambda v: True,                                     "bg": "mint",      "icon": "low"},
+        {"when": lambda bal, aft: (aft is not None) and (pd.notna(aft)) and (float(aft) < 0), "bg": "light_red", "icon": "negative"},
+        {"when": lambda bal, aft: (bal is not None) and (pd.notna(bal)) and (float(bal) < 0), "bg": "light_red", "icon": "negative"},
+        {"when": lambda bal, aft: (bal is not None) and (pd.notna(bal)) and (float(bal) > 500_000), "bg": "lavender", "icon": "very_high"},
+        {"when": lambda bal, aft: (bal is not None) and (pd.notna(bal)) and (float(bal) > 100_000), "bg": "pink", "icon": "high"},
+        {"when": lambda bal, aft: (bal is not None) and (pd.notna(bal)) and (float(bal) > 50_000), "bg": "sky", "icon": "medium"},
+        {"when": lambda bal, aft: True, "bg": "mint", "icon": "low"},
     ],
     "kpi": {
         "total_balance":     {"bg": "#EEF2FF", "border": "#C7D2FE", "color": "#1E3A8A"},
@@ -77,11 +78,11 @@ THEME = {
     },
 }
 
-def get_card_style(amount: float) -> dict:
+def get_card_style(bal: float, aft: Optional[float]) -> dict:
     pal, icons = THEME["palette"], THEME["icons"]
     for rule in THEME["card_rules"]:
         try:
-            if rule["when"](amount):
+            if rule["when"](bal, aft):
                 return {
                     "bg": pal[rule["bg"]],
                     "icon": icons[rule["icon"]],
@@ -191,37 +192,23 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
 def _to_number(x) -> float:
     """
     Robust numeric parser:
-    - handles commas, spaces, currency text (e.g., 'SAR')
-    - handles minus variants (– — −) and accounting negatives '(5,000)'
-    - returns NaN if unparsable or absurdly large
+    - commas, currency text, unicode minus, accounting '(5,000)'
     """
     if pd.isna(x) or str(x).strip() == "":
         return np.nan
     s = str(x).strip()
-
-    # normalize unicode minus to hyphen
-    s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\u2212", "-")
-
-    # accounting parentheses
+    s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\u2212", "-")  # normalize dash/minus
     negative = False
     if re.match(r"^\(.*\)$", s):
         negative = True
         s = s[1:-1]
-
-    # remove currency text & spaces
-    s = re.sub(r"[A-Za-z\s]", "", s)
-
-    # remove thousands separators
-    s = s.replace(",", "")
-
-    # if nothing left, bail
+    s = re.sub(r"[A-Za-z\s]", "", s)  # remove currency/space
+    s = s.replace(",", "")            # remove thousands
     if s in {"", "-", "."}:
         return np.nan
-
     try:
         num = float(s)
-        if negative:
-            num = -num
+        if negative: num = -num
         if abs(num) > 1e12:
             logger.warning(f"Unusually large number detected: {num}")
             return np.nan
@@ -434,9 +421,8 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
     """
     Output columns:
       - bank
-      - balance  (available)
-      - after_settlement (optional, raw 'due' amount)
-      - projected (optional, balance - after_settlement)
+      - balance  (Available Balance)
+      - after_settlement (Balance After Settlement) — if present
     """
     try:
         c = cols_lower(df)
@@ -452,12 +438,10 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
                 })
                 if after_col:
                     out["after_settlement"] = c[after_col].map(_to_number)
-                    out["projected"] = out["balance"] - out["after_settlement"].fillna(0)
                 out = out.dropna(subset=["bank"])
                 if validate_dataframe(out, ["bank", "balance"], "Bank Balance"):
                     agg = {"balance": "sum"}
                     if "after_settlement" in out.columns: agg["after_settlement"] = "sum"
-                    if "projected" in out.columns: agg["projected"] = "sum"
                     by_bank = out.groupby("bank", as_index=False).agg(agg)
                     return by_bank, datetime.now()
 
@@ -497,12 +481,10 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         sub["bank"] = sub["bank"].str.replace(r"\s*-\s*.*$", "", regex=True).str.strip()
         if after_col:
             sub["after_settlement"] = sub["after_settlement"].astype(str).str.replace(",", "", regex=False).map(_to_number)
-            sub["projected"] = sub["balance"] - sub["after_settlement"].fillna(0)
 
         latest_date = date_map[latest_col]
         agg = {"balance": "sum"}
         if after_col: agg["after_settlement"] = "sum"
-        if "projected" in sub.columns: agg["projected"] = "sum"
         by_bank = sub.dropna(subset=["bank"]).groupby("bank", as_index=False).agg(agg)
 
         if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
@@ -520,7 +502,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
             return pd.DataFrame()
         status_norm = d["status"].astype(str).str.strip().str.lower()
-        d = d.loc[status_norm.str.contains("approved", na=False)].copy()
+        d = d.loc[status_norm.str_contains("approved", na=False)].copy()
         if d.empty:
             logger.info("No approved payments found"); return pd.DataFrame()
         amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
@@ -596,7 +578,7 @@ def render_header():
     st.markdown('<div class="main-header">', unsafe_allow_html=True)
     c_logo, c_title = st.columns([0.08, 0.92])
     with c_logo:
-        # Hide emoji/tooltip fallback: show logo only if file exists
+        # Hide emoji/tooltip fallback: only show if file exists
         try:
             if os.path.exists(config.LOGO_PATH):
                 st.image(config.LOGO_PATH, width=44)
@@ -727,30 +709,32 @@ def main():
             for i, row in df_bal_view.iterrows():
                 with cols[int(i) % 4]:
                     bal = row.get('balance', np.nan)
-                    due = row.get('after_settlement', np.nan)
-                    proj = row.get('projected', np.nan)
+                    aft = row.get('after_settlement', np.nan)
 
-                    # Choose color by PROJECTED (fallback to available)
-                    effective = proj if pd.notna(proj) else bal
-                    style = get_card_style(effective)
-
+                    # Style choice
+                    style = get_card_style(bal, aft)
                     bg = style["bg"]; icon = style["icon"]
                     text = style["text"]; neg = style["text_negative"]; after_label = style["after_label"]
 
-                    bal_color  = neg if (pd.notna(bal)  and float(bal)  < 0) else text
-                    due_color  = neg if (pd.notna(due)  and float(due)  < 0) else after_label
-                    proj_color = neg if (pd.notna(proj) and float(proj) < 0) else text
+                    bal_color = neg if (pd.notna(bal) and float(bal) < 0) else text
+                    aft_color = neg if (pd.notna(aft) and float(aft) < 0) else text
 
-                    due_html = (
-                        f'<div style="font-size:12px;font-weight:600;color:{after_label};opacity:.85;margin-top:6px;">Due (After Settlement): '
-                        f'<span style="font-weight:800;color:{due_color};">{fmt_currency(due)}</span></div>'
-                        if pd.notna(due) else ''
+                    aft_block = (
+                        f"""
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;">
+                            <div style="font-size:11px;color:{after_label};opacity:.85;">Balance After Settlement</div>
+                            <div style="font-size:20px;font-weight:800;color:{aft_color};">{fmt_currency(aft)}</div>
+                        </div>
+                        """
+                        if "after_settlement" in row.index else
+                        f"""
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;">
+                            <div style="font-size:11px;color:{after_label};opacity:.85;">Balance After Settlement</div>
+                            <div style="font-size:20px;font-weight:800;color:{after_label};">N/A</div>
+                        </div>
+                        """
                     )
-                    proj_html = (
-                        f'<div style="font-size:14px;font-weight:800;color:{proj_color};text-align:right;margin-top:6px;">'
-                        f'Projected: {fmt_currency(proj)}</div>'
-                        if pd.notna(proj) else ''
-                    )
+
                     st.markdown(
                         f"""
                         <div style="background-color:{bg};padding:20px;border-radius:12px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
@@ -759,13 +743,13 @@ def main():
                                 <span style="font-size:13px;font-weight:600;color:{text};">{row['bank']}</span>
                             </div>
                             <div style="font-size:24px;font-weight:800;color:{bal_color};text-align:right;">{fmt_currency(bal)}</div>
-                            <div style="font-size:9px;color:{text};opacity:.7;margin-top:6px;">Available Balance</div>
-                            {due_html}
-                            {proj_html}
+                            <div style="font-size:11px;color:{text};opacity:.7;margin-top:6px;">Available Balance</div>
+                            {aft_block}
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
+
         elif view == "List":
             display_as_list(df_bal_view, "bank", "balance", "Bank Balances")
         elif view == "Mini Cards":
@@ -775,8 +759,14 @@ def main():
         elif view == "Metrics":
             display_as_metrics(df_bal_view, "bank", "balance")
         else:
-            table = df_bal_view.rename(columns={"bank": "Bank", "balance": "Balance"})
-            st.dataframe(style_right(table, num_cols=["Balance"]), use_container_width=True, height=360)
+            # Show both columns if present
+            table = df_bal_view.rename(columns={
+                "bank": "Bank",
+                "balance": "Available",
+                "after_settlement": "Balance After Settlement"
+            })
+            num_cols = [c for c in ["Available", "Balance After Settlement"] if c in table.columns]
+            st.dataframe(style_right(table, num_cols=num_cols), use_container_width=True, height=360)
 
     st.markdown("---")
 
@@ -899,45 +889,26 @@ def main():
 
     # ===== Quick Insights =====
     st.header("💡 Quick Insights & Recommendations")
-
     insights = []
-    # Projected totals
-    projected_total = None
-    if not df_by_bank.empty and "projected" in df_by_bank.columns:
-        projected_total = df_by_bank["projected"].sum()
-
     if not df_by_bank.empty:
         top_bank = df_by_bank.sort_values("balance", ascending=False).iloc[0]
         insights.append({"type": "info", "title": "Top Bank Balance", "content": f"**{top_bank['bank']}** has the highest available: {fmt_number_only(top_bank['balance'])}"})
-
-        if "after_settlement" in df_by_bank.columns and df_by_bank["after_settlement"].notna().any():
-            total_due = df_by_bank["after_settlement"].sum()
-            insights.append({"type": "info", "title": "Total Due", "content": f"After-Settlement due across banks: **{fmt_number_only(total_due)}**"})
-
-        if "projected" in df_by_bank.columns:
-            neg = df_by_bank[df_by_bank["projected"] < 0]
-            if not neg.empty:
-                deficit = -neg["projected"].sum()
-                worst = neg.nsmallest(1, "projected").iloc[0]
-                insights.append({"type": "error", "title": "Projected Deficit", "content": f"{len(neg)} bank(s) negative after settlement, total deficit **{fmt_number_only(deficit)}**. Worst: **{worst['bank']} ({fmt_number_only(worst['projected'])})**"})
-            else:
-                insights.append({"type": "info", "title": "Projected Liquidity", "content": f"All banks remain non-negative after settlement. Total projected: **{fmt_number_only(projected_total)}**"})
-
         total_bal = df_by_bank["balance"].sum()
+        if "after_settlement" in df_by_bank.columns:
+            total_after = df_by_bank["after_settlement"].sum()
+            insights.append({"type": "info", "title": "Total After Settlement", "content": f"Sum of 'Balance After Settlement' across banks: **{fmt_number_only(total_after)}**"})
+            neg_after = df_by_bank[df_by_bank["after_settlement"] < 0]
+            if not neg_after.empty:
+                deficit = -neg_after["after_settlement"].sum()
+                worst = neg_after.nsmallest(1, "after_settlement").iloc[0]
+                insights.append({"type": "error", "title": "Negative After Settlement", "content": f"{len(neg_after)} bank(s) negative after settlement. Total deficit **{fmt_number_only(deficit)}**. Worst: **{worst['bank']} ({fmt_number_only(worst['after_settlement'])})**"})
         if total_bal:
             top_3_pct = df_by_bank.nlargest(3, "balance")["balance"].sum() / total_bal * 100
             if top_3_pct > 80:
                 insights.append({"type": "warning", "title": "Concentration Risk", "content": f"Top 3 banks hold {top_3_pct:.1f}% of total available. Consider diversification."})
-
-    if not df_pay.empty and total_balance:
-        total_approved = df_pay["amount"].sum()
-        if total_approved > total_balance * 0.8:
-            insights.append({"type": "warning", "title": "Cash Flow Alert", "content": f"Approved payments ({fmt_number_only(total_approved)}) are {(total_approved/total_balance)*100:.1f}% of available balance."})
-
-    if not df_lc.empty:
-        urgent7 = df_lc[df_lc["settlement_date"] <= today0 + pd.Timedelta(days=7)]
-        if not urgent7.empty:
-            insights.append({"type": "error", "title": "Urgent LC Settlements", "content": f"{len(urgent7)} LC(s) due within 7 days totaling {fmt_number_only(urgent7['amount'].sum())}"})
+        neg_avail_cnt = int((df_by_bank["balance"] < 0).sum())
+        if neg_avail_cnt > 0:
+            insights.append({"type": "warning", "title": "Negative Available Balances", "content": f"{neg_avail_cnt} bank(s) showing negative available balances."})
 
     if insights:
         for ins in insights:
