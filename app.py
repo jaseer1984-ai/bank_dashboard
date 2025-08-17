@@ -1,9 +1,10 @@
 # app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, Right-Aligned Tables, and Global Font
-# Adds: "After Settlement" amount on Bank Balance cards, a footer, and fixes Styler type-hint crash.
-# Update: detects "Balance After Settlement/Settelment" even if the text sits in row 2 (not a real header).
-# NEW: "Collection vs Payments by Branch" (gid=457517415) section with Bars/Table/Cards views.
+# Adds: "After Settlement" amount on Bank Balance cards, centralized THEME config, and negative-balance styling.
+# Fixes: robust negative parsing (including parentheses & Unicode minus) and the pandas Styler type-hint crash.
+# Includes: "Collection vs Payments by Branch" (gid=457517415) section.
 
 import io
+import re
 import time
 import logging
 import os
@@ -40,6 +41,53 @@ class Config:
     RATE_LIMIT_CALLS_PER_MINUTE: int = int(os.getenv('RATE_LIMIT_CPM', '12'))
 
 config = Config()
+
+# ---- Theme (colors/icons all in one place) ----
+THEME = {
+    "icons": {
+        "neg": "🚫",
+        "best": "💎",
+        "good": "🔹",
+        "ok": "💠",
+        "low": "💚",
+    },
+    "card_bg": {
+        "neg": "#fee2e2",  # light red
+        "best": "#e0e7ff",  # indigo-100
+        "good": "#fce7f3",  # pink-100
+        "ok": "#e0f2fe",    # sky-100
+        "low": "#ecfdf5",   # green-100
+    },
+    "amount_color": {
+        "pos": "#1e293b",  # slate-800
+        "neg": "#b91c1c",  # red-700
+        "subtle": "#334155"
+    },
+    "kpi": {  # (kept as-is; used in sidebar cards)
+        "total_bg": "#EEF2FF", "total_bd": "#C7D2FE", "total_fg": "#1E3A8A",
+        "appr_bg": "#E9FFF2", "appr_bd": "#C7F7DD", "appr_fg": "#065F46",
+        "lc_bg": "#FFF7E6", "lc_bd": "#FDE9C8", "lc_fg": "#92400E",
+        "bank_bg": "#FFF1F2", "bank_bd": "#FBD5D8", "bank_fg": "#9F1239",
+    },
+    "card_thresholds": [500_000, 100_000, 50_000],  # best, good, ok, else low
+}
+
+def pick_card_style(balance: float) -> Tuple[str, str, str]:
+    """Return (bg_color, icon, amount_color) based on balance with negative case first."""
+    try:
+        b = float(balance)
+    except Exception:
+        b = np.nan
+    if pd.notna(b) and b < 0:
+        return THEME["card_bg"]["neg"], THEME["icons"]["neg"], THEME["amount_color"]["neg"]
+    t1, t2, t3 = THEME["card_thresholds"]
+    if pd.notna(b) and b > t1:
+        return THEME["card_bg"]["best"], THEME["icons"]["best"], THEME["amount_color"]["pos"]
+    if pd.notna(b) and b > t2:
+        return THEME["card_bg"]["good"], THEME["icons"]["good"], THEME["amount_color"]["pos"]
+    if pd.notna(b) and b > t3:
+        return THEME["card_bg"]["ok"], THEME["icons"]["ok"], THEME["amount_color"]["pos"]
+    return THEME["card_bg"]["low"], THEME["icons"]["low"], THEME["amount_color"]["pos"]
 
 # ----------------------------
 # Logging Setup
@@ -141,18 +189,48 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
 # Helpers: parsing + formatting
 # ----------------------------
 def _to_number(x) -> float:
+    """
+    Robust numeric parser:
+    - keeps negatives, supports Unicode minus (U+2212),
+    - supports '(12,345.67)' parentheses as negative,
+    - ignores currency text, thousands commas, and trailing '%'.
+    """
     if pd.isna(x) or x == '':
         return np.nan
-    s = str(x).strip().replace(",", "")
-    if s.endswith("%"):
+    s = str(x).strip()
+    if s == '':
+        return np.nan
+
+    s = s.replace('\u2212', '-')  # normalize unicode minus to ASCII
+    neg_paren = False
+    if '(' in s and ')' in s:
+        neg_paren = True
+        s = s.replace('(', '').replace(')', '')
+
+    # remove thousands separators
+    s = s.replace(',', '')
+
+    # percent?
+    is_pct = s.endswith('%')
+    if is_pct:
         s = s[:-1]
+
+    # extract first float-like number
+    m = re.search(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', s)
+    if not m:
+        return np.nan
     try:
-        num = float(s)
+        num = float(m.group())
+        if neg_paren:
+            num = -num
+        if is_pct:
+            num = num / 100.0
+        # sanity guard
         if abs(num) > 1e12:
             logger.warning(f"Unusually large number detected: {num}")
             return np.nan
         return num
-    except (ValueError, OverflowError) as e:
+    except Exception as e:
         logger.debug(f"Number conversion failed for '{x}': {e}")
         return np.nan
 
@@ -421,7 +499,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
             return pd.DataFrame()
         status_norm = d["status"].astype("string").str.strip().str.lower()
-        mask = status_norm.str.contains(r"\bapproved\b", na=False)  # fixed .str.contains
+        mask = status_norm.str.contains(r"\bapproved\b", na=False)
         if not mask.any():
             logger.info("No approved payments found"); return pd.DataFrame()
         d = d.loc[mask].copy()
@@ -569,16 +647,12 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
                 """,
                 unsafe_allow_html=True
             )
-        _kpi("TOTAL BALANCE", total_balance, "#EEF2FF", "#C7D2FE", "#1E3A8A")
-        _kpi("APPROVED PAYMENTS", approved_sum, "#E9FFF2", "#C7F7DD", "#065F46")
-        _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
-        _kpi("ACTIVE BANKS", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
+        _kpi("TOTAL BALANCE", total_balance, THEME["kpi"]["total_bg"], THEME["kpi"]["total_bd"], THEME["kpi"]["total_fg"])
+        _kpi("APPROVED PAYMENTS", approved_sum, THEME["kpi"]["appr_bg"], THEME["kpi"]["appr_bd"], THEME["kpi"]["appr_fg"])
+        _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, THEME["kpi"]["lc_bg"], THEME["kpi"]["lc_bd"], THEME["kpi"]["lc_fg"])
+        _kpi("ACTIVE BANKS", banks_cnt, THEME["kpi"]["bank_bg"], THEME["kpi"]["bank_bd"], THEME["kpi"]["bank_fg"])
 
-        # Hidden details (kept commented):
-        # if bal_date:
-        #     st.markdown("...balance updated tile...")
-        # st.markdown("---")
-        # st.markdown("...sources block...")
+        # (Hidden details you asked to remove are kept commented)
 
 # ----------------------------
 # Main
@@ -654,71 +728,58 @@ def main():
     render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, bal_date)
 
     # ===== Bank Balance =====
-   # ===== Bank Balance =====
-st.header("🏦 Bank Balance")
-if df_by_bank.empty:
-    st.info("No balances found.")
-else:
-    view = st.radio("", options=["Cards", "List", "Mini Cards", "Progress Bars", "Metrics", "Table"],
-                    index=0, horizontal=True, label_visibility="collapsed")
-    df_bal_view = df_by_bank.copy().sort_values("balance", ascending=False)
-
-    if view == "Cards":
-        cols = st.columns(4)
-        for i, row in df_bal_view.iterrows():
-            with cols[int(i) % 4]:
-                bal = row.get('balance', np.nan)
-                after = row.get('after_settlement', np.nan)
-
-                # Negative styling
-                is_neg = pd.notna(bal) and float(bal) < 0
-                if is_neg:
-                    bg, icon, amount_color = "#fee2e2", "🚫", "#b91c1c"   # light red, red text
-                else:
-                    # original thresholds
-                    if bal > 500_000: bg, icon = "#e0e7ff", "💎"
-                    elif bal > 100_000: bg, icon = "#fce7f3", "🔹"
-                    elif bal > 50_000: bg, icon = "#e0f2fe", "💠"
-                    else: bg, icon = "#ecfdf5", "💚"
-                    amount_color = "#1e293b"
-
-                after_html = (
-                    f'<div style="font-size:14px;font-weight:700;'
-                    f'color:{"#b91c1c" if (pd.notna(after) and float(after) < 0) else "#334155"};'
-                    f'text-align:right;margin-top:8px;">'
-                    f'After Settlement: {fmt_currency(after)}</div>'
-                    if pd.notna(after) else ''
-                )
-
-                st.markdown(
-                    f"""
-                    <div style="background-color:{bg};padding:20px;border-radius:12px;margin-bottom:16px;
-                                box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-                        <div style="display:flex;align-items:center;margin-bottom:12px;">
-                            <span style="font-size:18px;margin-right:8px;">{icon}</span>
-                            <span style="font-size:13px;font-weight:600;color:#1e293b;">{row['bank']}</span>
-                        </div>
-                        <div style="font-size:24px;font-weight:800;color:{amount_color};text-align:right;">
-                            {fmt_currency(bal)}
-                        </div>
-                        <div style="font-size:9px;color:#1e293b;opacity:.7;margin-top:8px;">Available Balance</div>
-                        {after_html}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-    elif view == "List":
-        display_as_list(df_bal_view, "bank", "balance", "Bank Balances")
-    elif view == "Mini Cards":
-        display_as_mini_cards(df_bal_view, "bank", "balance")
-    elif view == "Progress Bars":
-        display_as_progress_bars(df_bal_view, "bank", "balance")
-    elif view == "Metrics":
-        display_as_metrics(df_bal_view, "bank", "balance")
+    st.header("🏦 Bank Balance")
+    if df_by_bank.empty:
+        st.info("No balances found.")
     else:
-        table = df_bal_view.rename(columns={"bank": "Bank", "balance": "Balance"})
-        st.dataframe(style_right(table, num_cols=["Balance"]), use_container_width=True, height=360)
+        view = st.radio("", options=["Cards", "List", "Mini Cards", "Progress Bars", "Metrics", "Table"],
+                        index=0, horizontal=True, label_visibility="collapsed")
+        df_bal_view = df_by_bank.copy().sort_values("balance", ascending=False)
 
+        if view == "Cards":
+            cols = st.columns(4)
+            for i, row in df_bal_view.iterrows():
+                with cols[int(i) % 4]:
+                    bal = row.get('balance', np.nan)
+                    after = row.get('after_settlement', np.nan)
+
+                    bg, icon, amount_color = pick_card_style(bal)
+                    after_color = THEME["amount_color"]["subtle"]
+                    if pd.notna(after) and float(after) < 0:
+                        after_color = THEME["amount_color"]["neg"]
+
+                    after_html = (
+                        f'<div style="font-size:14px;font-weight:700;color:{after_color};text-align:right;margin-top:8px;">'
+                        f'After Settlement: {fmt_currency(after)}</div>'
+                        if pd.notna(after) else ''
+                    )
+                    st.markdown(
+                        f"""
+                        <div style="background-color:{bg};padding:20px;border-radius:12px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+                            <div style="display:flex;align-items:center;margin-bottom:12px;">
+                                <span style="font-size:18px;margin-right:8px;">{icon}</span>
+                                <span style="font-size:13px;font-weight:600;color:#1e293b;">{row['bank']}</span>
+                            </div>
+                            <div style="font-size:24px;font-weight:800;color:{amount_color};text-align:right;">{fmt_currency(bal)}</div>
+                            <div style="font-size:9px;color:#1e293b;opacity:.7;margin-top:8px;">Available Balance</div>
+                            {after_html}
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+        elif view == "List":
+            display_as_list(df_bal_view, "bank", "balance", "Bank Balances")
+        elif view == "Mini Cards":
+            display_as_mini_cards(df_bal_view, "bank", "balance")
+        elif view == "Progress Bars":
+            display_as_progress_bars(df_bal_view, "bank", "balance")
+        elif view == "Metrics":
+            display_as_metrics(df_bal_view, "bank", "balance")
+        else:
+            table = df_bal_view.rename(columns={"bank": "Bank", "balance": "Balance"})
+            st.dataframe(style_right(table, num_cols=["Balance"]), use_container_width=True, height=360)
+
+    st.markdown("---")
 
     # ===== Supplier Payments =====
     st.header("💰 Approved Payments")
@@ -894,7 +955,6 @@ else:
         cvp_view = st.radio("",
                             options=["Bars", "Table", "Cards"],
                             index=0, horizontal=True, label_visibility="collapsed")
-        # Sort by net desc by default
         cvp_sorted = df_cvp.sort_values("net", ascending=False).reset_index(drop=True)
 
         if cvp_view == "Bars":
@@ -919,7 +979,6 @@ else:
                 "branch": "Branch", "collection": "Collection", "payments": "Payments", "net": "Net"
             })
             styled = style_right(tbl, num_cols=["Collection", "Payments", "Net"])
-            # Red text for negative Net
             def _net_red(val):
                 try:
                     return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
@@ -934,7 +993,7 @@ else:
                 with cols[i % 3]:
                     net = row["net"]
                     pos = net >= 0
-                    bg = "#ecfdf5" if pos else "#fee2e2"   # light green / light red
+                    bg = "#ecfdf5" if pos else "#fee2e2"
                     title = "Net Surplus" if pos else "Net Deficit"
                     net_color = "#065f46" if pos else "#b91c1c"
                     st.markdown(
@@ -973,6 +1032,10 @@ else:
             top_3_pct = df_by_bank.nlargest(3, "balance")["balance"].sum() / total_bal * 100
             if top_3_pct > 80:
                 insights.append({"type": "warning", "title": "Concentration Risk", "content": f"Top 3 banks hold {top_3_pct:.1f}% of total balance. Consider diversification."})
+        # NEW insight: negative balances
+        neg_df = df_by_bank[df_by_bank["balance"] < 0]
+        if not neg_df.empty:
+            insights.append({"type": "error", "title": "Negative Bank Balances", "content": f"{len(neg_df)} bank(s) show negative balances totaling {fmt_number_only(neg_df['balance'].sum())}."})
     if not df_pay.empty and total_balance:
         total_approved = df_pay["amount"].sum()
         if total_approved > total_balance * 0.8:
@@ -1012,4 +1075,3 @@ else:
 
 if __name__ == "__main__":
     main()
-
