@@ -654,56 +654,71 @@ def main():
     render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, bal_date)
 
     # ===== Bank Balance =====
-    st.header("🏦 Bank Balance")
-    if df_by_bank.empty:
-        st.info("No balances found.")
-    else:
-        view = st.radio("", options=["Cards", "List", "Mini Cards", "Progress Bars", "Metrics", "Table"],
-                        index=0, horizontal=True, label_visibility="collapsed")
-        df_bal_view = df_by_bank.copy().sort_values("balance", ascending=False)
+   # ===== Bank Balance =====
+st.header("🏦 Bank Balance")
+if df_by_bank.empty:
+    st.info("No balances found.")
+else:
+    view = st.radio("", options=["Cards", "List", "Mini Cards", "Progress Bars", "Metrics", "Table"],
+                    index=0, horizontal=True, label_visibility="collapsed")
+    df_bal_view = df_by_bank.copy().sort_values("balance", ascending=False)
 
-        if view == "Cards":
-            cols = st.columns(4)
-            for i, row in df_bal_view.iterrows():
-                with cols[int(i) % 4]:
-                    bal = row.get('balance', np.nan)
-                    after = row.get('after_settlement', np.nan)
+    if view == "Cards":
+        cols = st.columns(4)
+        for i, row in df_bal_view.iterrows():
+            with cols[int(i) % 4]:
+                bal = row.get('balance', np.nan)
+                after = row.get('after_settlement', np.nan)
+
+                # Negative styling
+                is_neg = pd.notna(bal) and float(bal) < 0
+                if is_neg:
+                    bg, icon, amount_color = "#fee2e2", "🚫", "#b91c1c"   # light red, red text
+                else:
+                    # original thresholds
                     if bal > 500_000: bg, icon = "#e0e7ff", "💎"
                     elif bal > 100_000: bg, icon = "#fce7f3", "🔹"
                     elif bal > 50_000: bg, icon = "#e0f2fe", "💠"
                     else: bg, icon = "#ecfdf5", "💚"
-                    after_html = (
-                        f'<div style="font-size:14px;font-weight:700;color:#334155;text-align:right;margin-top:8px;">'
-                        f'After Settlement: {fmt_currency(after)}</div>'
-                        if pd.notna(after) else ''
-                    )
-                    st.markdown(
-                        f"""
-                        <div style="background-color:{bg};padding:20px;border-radius:12px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-                            <div style="display:flex;align-items:center;margin-bottom:12px;">
-                                <span style="font-size:18px;margin-right:8px;">{icon}</span>
-                                <span style="font-size:13px;font-weight:600;color:#1e293b;">{row['bank']}</span>
-                            </div>
-                            <div style="font-size:24px;font-weight:800;color:#1e293b;text-align:right;">{fmt_currency(bal)}</div>
-                            <div style="font-size:9px;color:#1e293b;opacity:.7;margin-top:8px;">Available Balance</div>
-                            {after_html}
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-        elif view == "List":
-            display_as_list(df_bal_view, "bank", "balance", "Bank Balances")
-        elif view == "Mini Cards":
-            display_as_mini_cards(df_bal_view, "bank", "balance")
-        elif view == "Progress Bars":
-            display_as_progress_bars(df_bal_view, "bank", "balance")
-        elif view == "Metrics":
-            display_as_metrics(df_bal_view, "bank", "balance")
-        else:
-            table = df_bal_view.rename(columns={"bank": "Bank", "balance": "Balance"})
-            st.dataframe(style_right(table, num_cols=["Balance"]), use_container_width=True, height=360)
+                    amount_color = "#1e293b"
 
-    st.markdown("---")
+                after_html = (
+                    f'<div style="font-size:14px;font-weight:700;'
+                    f'color:{"#b91c1c" if (pd.notna(after) and float(after) < 0) else "#334155"};'
+                    f'text-align:right;margin-top:8px;">'
+                    f'After Settlement: {fmt_currency(after)}</div>'
+                    if pd.notna(after) else ''
+                )
+
+                st.markdown(
+                    f"""
+                    <div style="background-color:{bg};padding:20px;border-radius:12px;margin-bottom:16px;
+                                box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+                        <div style="display:flex;align-items:center;margin-bottom:12px;">
+                            <span style="font-size:18px;margin-right:8px;">{icon}</span>
+                            <span style="font-size:13px;font-weight:600;color:#1e293b;">{row['bank']}</span>
+                        </div>
+                        <div style="font-size:24px;font-weight:800;color:{amount_color};text-align:right;">
+                            {fmt_currency(bal)}
+                        </div>
+                        <div style="font-size:9px;color:#1e293b;opacity:.7;margin-top:8px;">Available Balance</div>
+                        {after_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+    elif view == "List":
+        display_as_list(df_bal_view, "bank", "balance", "Bank Balances")
+    elif view == "Mini Cards":
+        display_as_mini_cards(df_bal_view, "bank", "balance")
+    elif view == "Progress Bars":
+        display_as_progress_bars(df_bal_view, "bank", "balance")
+    elif view == "Metrics":
+        display_as_metrics(df_bal_view, "bank", "balance")
+    else:
+        table = df_bal_view.rename(columns={"bank": "Bank", "balance": "Balance"})
+        st.dataframe(style_right(table, num_cols=["Balance"]), use_container_width=True, height=360)
+
 
     # ===== Supplier Payments =====
     st.header("💰 Approved Payments")
@@ -997,3 +1012,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
