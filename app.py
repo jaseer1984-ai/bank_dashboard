@@ -1,5 +1,5 @@
-# app.py — Enhanced Treasury Dashboard with Sidebar KPIs and Health Status
-# Major improvements: KPIs and Data Health moved to left sidebar for better space utilization
+# app.py — Enhanced Treasury Dashboard with Sidebar KPIs and Clean Header
+# Major improvements: KPIs and Data Health moved to left sidebar, clean frozen header
 
 import io
 import time
