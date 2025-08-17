@@ -1,5 +1,5 @@
 # app.py — Enhanced Treasury Dashboard with Sidebar KPIs, Clean Header, Auto-Refresh, Right-Aligned Tables, and Global Font
-# Includes fix for scalar Timestamp (.days inside loops) and unified font across the app.
+# Adds: "After Settlement" amount on Bank Balance cards and a footer "Created By Jaseer Pykkarathodi"
 
 import io
 import time
@@ -57,36 +57,15 @@ st.set_page_config(
 APP_FONT = os.getenv("APP_FONT", "Inter")  # e.g., "Inter", "Poppins", "Rubik"
 
 def set_app_font(family: str = APP_FONT):
-    # Load Google Font + force it everywhere in Streamlit (including widgets & tables)
     css = """
     <style>
       @import url('https://fonts.googleapis.com/css2?family={font_q}:wght@300;400;500;600;700;800&display=swap');
-
       :root {{ --app-font: '{font}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif; }}
-
-      html, body, [class^="css"], [class*=" css"] {{
-        font-family: var(--app-font) !important;
-      }}
-
-      /* Headings, text, labels */
-      h1, h2, h3, h4, h5, h6, p, span, div, label, small, strong, em {{
-        font-family: var(--app-font) !important;
-      }}
-
-      /* Buttons / inputs */
-      button, input, textarea, select {{
-        font-family: var(--app-font) !important;
-      }}
-
-      /* Metrics */
-      div[data-testid="stMetricValue"], div[data-testid="stMetricLabel"] {{
-        font-family: var(--app-font) !important;
-      }}
-
-      /* Dataframe */
-      div[data-testid="stDataFrame"] * {{
-        font-family: var(--app-font) !important;
-      }}
+      html, body, [class^="css"], [class*=" css"] {{ font-family: var(--app-font) !important; }}
+      h1, h2, h3, h4, h5, h6, p, span, div, label, small, strong, em {{ font-family: var(--app-font) !important; }}
+      button, input, textarea, select {{ font-family: var(--app-font) !important; }}
+      div[data-testid="stMetricValue"], div[data-testid="stMetricLabel"] {{ font-family: var(--app-font) !important; }}
+      div[data-testid="stDataFrame"] * {{ font-family: var(--app-font) !important; }}
     </style>
     """.format(font_q=family.replace(" ", "+"), font=family)
     st.markdown(css, unsafe_allow_html=True)
@@ -187,16 +166,12 @@ def fmt_number_only(v) -> str:
         return str(v)
 
 def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> pd.io.formats.style.Styler:
-    """
-    Return right-aligned Styler for numeric columns.
-    Keeps numbers numeric (sortable), formats with thousands separators.
-    """
     if num_cols is None:
         num_cols = df.select_dtypes(include="number").columns
     fmt = f"{{:,.{decimals}f}}".format
     styler = (df.style
                 .format({col: fmt for col in num_cols})
-                .set_properties(**{"font-family": "var(--app-font)"})  # body font
+                .set_properties(**{"font-family": "var(--app-font)"})
                 .set_properties(subset=num_cols, **{"text-align": "right"})
                 .set_table_styles([{
                     "selector": "th",
@@ -208,7 +183,6 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> pd.io.formats.st
     return styler
 
 def days_until(d, ref):
-    """Scalar-safe days difference."""
     if pd.isna(d):
         return np.nan
     return int((pd.to_datetime(d) - pd.to_datetime(ref)).days)
@@ -337,45 +311,117 @@ def validate_dataframe(df: pd.DataFrame, required_cols: list, sheet_name: str) -
         st.warning(f"📊 {sheet_name}: Insufficient data rows"); return False
     return True
 
+def _find_after_settlement_col(columns: pd.Index) -> Optional[str]:
+    """
+    Try to detect an 'After Settlement' column, tolerant to spelling like 'Settelment'.
+    """
+    for col in columns:
+        c = str(col).strip().lower()
+        if "after" in c and ("settle" in c or "settel" in c):
+            return col
+        if "balance after" in c and ("settle" in c or "settel" in c):
+            return col
+    return None
+
+def _find_available_col(columns: pd.Index) -> Optional[str]:
+    """
+    Prefer explicit 'available balance' if present; otherwise fall back to 'amount' columns.
+    """
+    for col in columns:
+        c = str(col).strip().lower()
+        if "available" in c and "balance" in c:
+            return col
+    if "amount" in [str(c).lower() for c in columns]:
+        return "amount"
+    if "amount(sar)" in [str(c).lower() for c in columns]:
+        return "amount(sar)"
+    if "balance" in [str(c).lower() for c in columns]:
+        return "balance"
+    return None
+
 def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetime]]:
+    """
+    Returns DataFrame with columns:
+      - bank
+      - balance  (available)
+      - after_settlement (optional if column exists)
+    """
     try:
         c = cols_lower(df)
-        if "bank" in c.columns and ("amount" in c.columns or "amount(sar)" in c.columns):
-            amt_col = "amount" if "amount" in c.columns else "amount(sar)"
-            out = pd.DataFrame({"bank": c["bank"].astype(str).str.strip(), "balance": c[amt_col].map(_to_number)}).dropna()
-            if validate_dataframe(out, ["bank", "balance"], "Bank Balance"):
-                by_bank = out.groupby("bank", as_index=False)["balance"].sum()
-                return by_bank, datetime.now()
 
+        # --- Case A: structured columns present (bank + available/amount + optional after settlement)
+        if "bank" in c.columns:
+            avail_col = _find_available_col(c.columns)
+            after_col = _find_after_settlement_col(c.columns)
+
+            if avail_col:
+                out = pd.DataFrame({
+                    "bank": c["bank"].astype(str).str.strip(),
+                    "balance": c[avail_col].map(_to_number)
+                })
+                if after_col:
+                    out["after_settlement"] = c[after_col].map(_to_number)
+                out = out.dropna(subset=["bank"])
+                if validate_dataframe(out, ["bank", "balance"], "Bank Balance"):
+                    # group & sum
+                    agg = {"balance": "sum"}
+                    if "after_settlement" in out.columns:
+                        agg["after_settlement"] = "sum"
+                    by_bank = out.groupby("bank", as_index=False).agg(agg)
+                    return by_bank, datetime.now()
+
+        # --- Case B: legacy layout with date column + separate 'after settlement' column
         raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
+
+        # find bank col
         bank_col = None
         for col in raw.columns:
             if raw[col].dtype == object:
                 non_empty = (raw[col].dropna().astype(str).str.strip() != "").sum()
                 if non_empty >= 3:
                     bank_col = col; break
-        if bank_col is None: raise ValueError("Could not detect bank column")
+        if bank_col is None:
+            raise ValueError("Could not detect bank column")
 
+        # find the latest date column for 'available'
         parsed = pd.to_datetime(pd.Index(raw.columns), errors="coerce", dayfirst=False)
         date_cols = [col for col, d in zip(raw.columns, parsed) if pd.notna(d)]
-        if not date_cols: raise ValueError("No valid date columns found")
+        if not date_cols:
+            raise ValueError("No valid date columns found")
         date_map = {col: pd.to_datetime(col, errors="coerce", dayfirst=False) for col in date_cols}
         latest_col = max(date_cols, key=lambda c: date_map[c])
 
+        # optional 'after settlement'
+        after_col = _find_after_settlement_col(raw.columns)
+
         s = raw[bank_col].astype(str).str.strip()
         mask = s.ne("") & ~s.str.contains("available|total", case=False, na=False)
-        sub = raw.loc[mask, [bank_col, latest_col]].copy()
-        sub.columns = ["bank", "balance"]
+
+        keep_cols = [bank_col, latest_col] + ([after_col] if after_col else [])
+        sub = raw.loc[mask, keep_cols].copy()
+        rename_map = {bank_col: "bank", latest_col: "balance"}
+        if after_col:
+            rename_map[after_col] = "after_settlement"
+        sub = sub.rename(columns=rename_map)
+
         sub["balance"] = sub["balance"].astype(str).str.replace(",", "", regex=False).map(_to_number)
         sub["bank"] = sub["bank"].str.replace(r"\s*-\s*.*$", "", regex=True).str.strip()
+        if after_col:
+            sub["after_settlement"] = sub["after_settlement"].astype(str).str.replace(",", "", regex=False).map(_to_number)
 
         latest_date = date_map[latest_col]
-        by_bank = sub.dropna().groupby("bank", as_index=False)["balance"].sum()
+        agg = {"balance": "sum"}
+        if after_col:
+            agg["after_settlement"] = "sum"
+        by_bank = sub.dropna(subset=["bank"]).groupby("bank", as_index=False).agg(agg)
+
         if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
             return by_bank, latest_date
+
     except Exception as e:
         logger.error(f"Bank balance parsing error: {e}")
         st.error(f"❌ Bank balance parsing failed: {str(e)}")
+
     return pd.DataFrame(), None
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
@@ -507,38 +553,11 @@ def render_enhanced_sidebar(data_status, total_balance, approved_sum, lc_next4_s
         _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, "#FFF7E6", "#FDE9C8", "#92400E")
         _kpi("ACTIVE BANKS", banks_cnt, "#FFF1F2", "#FBD5D8", "#9F1239")
 
-        # 🔕 Hidden per your request:
-        # (Balance updated badge)
+        # Hidden details as requested earlier (badge & footer) – keep commented:
         # if bal_date:
-        #     st.markdown(
-        #         f"""
-        #         <div style="font-size:10px;color:#6b7280;text-align:center;margin-bottom:20px;padding:8px;background:#f9fafb;border-radius:6px;">
-        #             💡 Balance updated: {bal_date.strftime('%Y-%m-%d at %H:%M')}
-        #         </div>
-        #         """,
-        #         unsafe_allow_html=True
-        #     )
-
+        #     st.markdown(...)
         # st.markdown("---")
-        # (Dashboard/Sources footer block)
-        # st.markdown(
-        #     f"""
-        #     <div style="font-size:10px;color:#6b7280;line-height:1.4;">
-        #         <div><strong>📊 Dashboard</strong></div>
-        #         <div>Version: Enhanced v2.4</div>
-        #         <div>Cache: {config.CACHE_TTL}s</div>
-        #         <div>TZ: {config.TZ}</div>
-        #         <br>
-        #         <div><strong>📈 Sources</strong></div>
-        #         <div>Active: {sum(1 for status in data_status.values() if status == 'success')}/4</div>
-        #         <div>Refresh: {datetime.now().strftime('%H:%M:%S')}</div>
-        #         <br>
-        #         <div><strong>🏗️ By</strong></div>
-        #         <div>Jaseer Pykarathodi</div>
-        #     </div>
-        #     """,
-        #     unsafe_allow_html=True
-        # )
+        # st.markdown(...)
 
 # ----------------------------
 # Main
@@ -616,11 +635,17 @@ def main():
             cols = st.columns(4)
             for i, row in df_bal_view.iterrows():
                 with cols[int(i) % 4]:
-                    bal = row['balance']
+                    bal = row.get('balance', np.nan)
+                    after = row.get('after_settlement', np.nan)
                     if bal > 500_000: bg, icon = "#e0e7ff", "💎"
                     elif bal > 100_000: bg, icon = "#fce7f3", "🔹"
                     elif bal > 50_000: bg, icon = "#e0f2fe", "💠"
                     else: bg, icon = "#ecfdf5", "💚"
+                    after_html = (
+                        f'<div style="font-size:14px;font-weight:700;color:#334155;text-align:right;margin-top:8px;">'
+                        f'After Settlement: {fmt_currency(after)}</div>'
+                        if pd.notna(after) else ''
+                    )
                     st.markdown(
                         f"""
                         <div style="background-color:{bg};padding:20px;border-radius:12px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
@@ -628,8 +653,9 @@ def main():
                                 <span style="font-size:18px;margin-right:8px;">{icon}</span>
                                 <span style="font-size:13px;font-weight:600;color:#1e293b;">{row['bank']}</span>
                             </div>
-                            <div style="font-size:24px;font-weight:800;color:#1e293b;text-align:right;">{fmt_currency(row['balance'])}</div>
+                            <div style="font-size:24px;font-weight:800;color:#1e293b;text-align:right;">{fmt_currency(bal)}</div>
                             <div style="font-size:9px;color:#1e293b;opacity:.7;margin-top:8px;">Available Balance</div>
+                            {after_html}
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -760,7 +786,6 @@ def main():
                 cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                 display_as_mini_cards(cards, "bank", "balance")
 
-            # Upcoming deadlines alert (uses .days, not .dt.days)
             urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
             if not urgent_lcs.empty:
                 st.warning(f"⚠️ {len(urgent_lcs)} LC(s) due within 3 days!")
@@ -794,7 +819,6 @@ def main():
                     fig.update_layout(title="Total Liquidity Trend", xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
                     fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
                     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
-                    # Apply global font to Plotly
                     fig.update_layout(font=dict(family=APP_FONT, size=14))
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception:
@@ -849,6 +873,13 @@ def main():
                 st.error(f"🚨 **{ins['title']}**: {ins['content']}")
     else:
         st.info("💡 Insights will appear as data becomes available and patterns emerge.")
+
+    # --- Footer ---
+    st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='text-align:center; opacity:0.8; font-size:12px;'>Created By <strong>Jaseer Pykkarathodi</strong></div>",
+        unsafe_allow_html=True
+    )
 
     # === Auto-refresh (end of app) ===
     if st.session_state.get("auto_refresh"):
