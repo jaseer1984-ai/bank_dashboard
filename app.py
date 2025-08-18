@@ -520,7 +520,7 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         agg = {"balance": "sum"}
         if after_col: agg["after_settlement"] = "sum"
         by_bank = sub.dropna(subset=["bank"]).groupby("bank", as_index=False).agg(agg)
-        if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"]:
+        if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
             return by_bank, latest_date
     except Exception as e:
         logger.error(f"Bank balance parsing error: {e}")
@@ -533,7 +533,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
             return pd.DataFrame()
         status_norm = d["status"].astype("string").str.strip().str.lower()
-        mask = status_norm.str.contains(r"\bapproved\b", na=False)
+        mask = status_norm.str_contains(r"\bapproved\b", regex=True, na=False) if hasattr(status_norm, "str_contains") else status_norm.str.contains(r"\bapproved\b", regex=True, na=False)
         if not mask.any():
             logger.info("No approved payments found"); return pd.DataFrame()
         d = d.loc[mask].copy()
