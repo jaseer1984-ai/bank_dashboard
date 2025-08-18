@@ -9,6 +9,7 @@
 # - Supplier Payments: tabs for Approved / Released
 # - Quick Insights moved to SIDEBAR TOP (excludes Top Bank & Concentration Risk)
 # - Highlights negative-balance banks in Quick Insights
+# - NEW: Highlights banks with **negative After Settlement** balances in Quick Insights
 
 import io
 import time
@@ -435,7 +436,7 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
                     by_bank = out.groupby("bank", as_index=False).agg(agg)
                     return by_bank, datetime.now()
 
-        # Fallback: legacy layout with date columns
+        # Fallback for legacy layout with date columns
         raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
         bank_col = None
         for col in raw.columns:
@@ -726,13 +727,12 @@ def main():
         st.markdown("### ⚡ Quick Insights")
         shown = False
 
-        # Highlight banks with negative balances (list + amounts)
+        # (1) Banks with negative *current* balances
         if not df_by_bank.empty:
             neg_df = df_by_bank[df_by_bank["balance"] < 0].sort_values("balance")
             neg_count = int(len(neg_df))
             if neg_count > 0:
                 st.error(f"🚨 **Negative Balances**: {neg_count} bank(s). Review overdrafts/settlements.")
-                # bullet list of negative banks
                 for _, r in neg_df.iterrows():
                     st.markdown(
                         f"- **{r['bank']}**: "
@@ -741,7 +741,22 @@ def main():
                     )
                 shown = True
 
-        # Cash flow pressure (Approved vs total balance)
+        # (2) NEW — Banks that will be negative After Settlement
+        if not df_by_bank.empty and "after_settlement" in df_by_bank.columns:
+            neg_after = df_by_bank[df_by_bank["after_settlement"] < 0].sort_values("after_settlement")
+            if len(neg_after) > 0:
+                st.error(f"🚨 **After Settlement Negative**: {len(neg_after)} bank(s) expected to go/stay negative.")
+                for _, r in neg_after.iterrows():
+                    prefix = "will turn" if (pd.notna(r.get("balance")) and r["balance"] >= 0) else "remains"
+                    st.markdown(
+                        f"- **{r['bank']}** {prefix} negative: "
+                        f"<span style='color:{THEME['amount_color']['neg']};font-weight:800;'>"
+                        f"{fmt_currency(r['after_settlement'])}</span> after settlement",
+                        unsafe_allow_html=True
+                    )
+                shown = True
+
+        # (3) Cash flow pressure (Approved vs total balance)
         if not df_pay_approved.empty and total_balance > 0:
             total_approved = float(df_pay_approved["amount"].sum())
             if total_approved > total_balance * 0.8:
@@ -749,14 +764,14 @@ def main():
                 st.warning(f"⚠️ **Cash Flow Alert**: Approved payments ({fmt_number_only(total_approved)}) are {pct:.1f}% of available balance.")
                 shown = True
 
-        # Urgent LC maturities (≤7 days)
+        # (4) Urgent LC maturities (≤7 days)
         if not df_lc.empty:
             urgent7 = df_lc[df_lc["settlement_date"] <= today0 + pd.Timedelta(days=7)]
             if len(urgent7) > 0:
                 st.error(f"🚨 **Urgent LC Settlements**: {len(urgent7)} due within 7 days totaling {fmt_number_only(float(urgent7['amount'].sum()))}.")
                 shown = True
 
-        # Liquidity downtrend
+        # (5) Liquidity downtrend
         if not df_fm.empty and len(df_fm) > 5:
             recent_trend = df_fm.tail(5)["total_liquidity"].pct_change().mean()
             if pd.notna(recent_trend) and recent_trend < -0.05:
