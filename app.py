@@ -6,6 +6,9 @@
 # - Negative balances: light-red card + red amount (no clamping)
 # - Light-blue headers on tables/cards
 # - Keeps: After Settlement on cards, CVP by Branch, Auto-refresh, Footer
+# - Supplier Payments: tabs for Approved / Released
+# - Quick Insights moved to SIDEBAR TOP (excludes Top Bank & Concentration Risk)
+# - Highlights negative-balance banks in Quick Insights
 
 import io
 import time
@@ -67,7 +70,7 @@ st.set_page_config(
 )
 
 # ---- Global font (one place to change) ----
-APP_FONT = os.getenv("APP_FONT", "Inter")  # e.g., "Inter", "Poppins", "Rubik")
+APP_FONT = os.getenv("APP_FONT", "Inter")  # e.g., "Inter", "Poppins", "Rubik"
 
 def set_app_font(family: str = APP_FONT):
     css = """
@@ -112,7 +115,7 @@ if "palette_name" not in st.session_state:
     st.session_state["palette_name"] = "Indigo"
 ACTIVE = PALETTES[st.session_state["palette_name"]]
 
-# Theme tokens
+# Theme tokens used across components
 THEME = {
     "accent1": ACTIVE["accent1"],
     "accent2": ACTIVE["accent2"],
@@ -127,10 +130,10 @@ THEME = {
         "neg_bg": "rgba(185,28,28,.10)",   # reddish
     },
     "icons": {"best": "💎", "good": "🔹", "ok": "💠", "low": "💚", "neg": "⚠️"},
-    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},
+    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},  # else low; negative -> neg
 }
 
-# Subtle hover + chips
+# Subtle hover for cards + section chips
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -139,8 +142,13 @@ st.markdown(f"""
     border-radius: 6px;
     box-shadow: 0 6px 18px rgba(0,0,0,.12);
   }}
-  .dash-card {{ transition: transform .15s ease, box-shadow .15s ease; }}
-  .dash-card:hover {{ transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.08); }}
+  .dash-card {{
+    transition: transform .15s ease, box-shadow .15s ease;
+  }}
+  .dash-card:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 10px 24px rgba(0,0,0,.08);
+  }}
   .section-chip {{
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
@@ -713,7 +721,52 @@ def main():
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0  # keep KPI semantics
 
-    # Sidebar
+    # --- Quick Insights (Sidebar — TOP) ---
+    with st.sidebar:
+        st.markdown("### ⚡ Quick Insights")
+        shown = False
+
+        # Highlight banks with negative balances (list + amounts)
+        if not df_by_bank.empty:
+            neg_df = df_by_bank[df_by_bank["balance"] < 0].sort_values("balance")
+            neg_count = int(len(neg_df))
+            if neg_count > 0:
+                st.error(f"🚨 **Negative Balances**: {neg_count} bank(s). Review overdrafts/settlements.")
+                # bullet list of negative banks
+                for _, r in neg_df.iterrows():
+                    st.markdown(
+                        f"- **{r['bank']}**: "
+                        f"<span style='color:{THEME['amount_color']['neg']};font-weight:800;'>{fmt_currency(r['balance'])}</span>",
+                        unsafe_allow_html=True
+                    )
+                shown = True
+
+        # Cash flow pressure (Approved vs total balance)
+        if not df_pay_approved.empty and total_balance > 0:
+            total_approved = float(df_pay_approved["amount"].sum())
+            if total_approved > total_balance * 0.8:
+                pct = (total_approved / total_balance) * 100
+                st.warning(f"⚠️ **Cash Flow Alert**: Approved payments ({fmt_number_only(total_approved)}) are {pct:.1f}% of available balance.")
+                shown = True
+
+        # Urgent LC maturities (≤7 days)
+        if not df_lc.empty:
+            urgent7 = df_lc[df_lc["settlement_date"] <= today0 + pd.Timedelta(days=7)]
+            if len(urgent7) > 0:
+                st.error(f"🚨 **Urgent LC Settlements**: {len(urgent7)} due within 7 days totaling {fmt_number_only(float(urgent7['amount'].sum()))}.")
+                shown = True
+
+        # Liquidity downtrend
+        if not df_fm.empty and len(df_fm) > 5:
+            recent_trend = df_fm.tail(5)["total_liquidity"].pct_change().mean()
+            if pd.notna(recent_trend) and recent_trend < -0.05:
+                st.warning(f"⚠️ **Declining Liquidity Trend**: Down {abs(recent_trend)*100:.1f}% on average over recent periods.")
+                shown = True
+
+        if not shown:
+            st.info("💡 No alerts right now.")
+
+    # Sidebar (controls & KPIs) — rendered AFTER insights so insights stay on top
     render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt)
 
     # Density tokens
@@ -925,181 +978,6 @@ def main():
                     st.write(f"• {lc['bank']} - {fmt_number_only(lc['amount'])} - {days_left} day(s) left")
 
     st.markdown("---")
-
-    # ===== Liquidity Trend =====
-    st.markdown('<span class="section-chip">📈 Liquidity Trend Analysis</span>', unsafe_allow_html=True)
-    if df_fm.empty:
-        st.info("No liquidity data available.")
-    else:
-        try:
-            # Plotly brand template
-            import plotly.io as pio, plotly.graph_objects as go
-            if "brand" not in pio.templates:
-                pio.templates["brand"] = pio.templates["plotly_white"]
-                pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
-                pio.templates["brand"].layout.font.family = APP_FONT
-                pio.templates["brand"].layout.paper_bgcolor = "white"
-                pio.templates["brand"].layout.plot_bgcolor = "white"
-
-            latest_liquidity = df_fm.iloc[-1]["total_liquidity"]
-            if len(df_fm) > 1:
-                prev = df_fm.iloc[-2]["total_liquidity"]
-                trend_change = latest_liquidity - prev
-                trend_pct = (trend_change / prev) * 100 if prev != 0 else 0
-                trend_text = f"{'📈' if trend_change > 0 else '📉'} {trend_pct:+.1f}%"
-            else:
-                trend_text = "No trend data"
-
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_fm["date"], y=df_fm["total_liquidity"], mode='lines+markers', line=dict(width=3), marker=dict(size=6)))
-                fig.update_layout(template="brand", title="Total Liquidity Trend",
-                                  xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
-                                  margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
-            with c2:
-                st.markdown("### 📊 Liquidity Metrics")
-                st.metric("Current", fmt_number_only(latest_liquidity))
-                if len(df_fm) > 1:
-                    st.metric("Trend", trend_text)
-                st.markdown("**Statistics (30d)**")
-                last30 = df_fm.tail(30)
-                st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
-                st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
-                st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
-        except Exception as e:
-            logger.error(f"Liquidity trend analysis error: {e}")
-            st.error("❌ Unable to display liquidity trend analysis")
-            st.line_chart(df_fm.set_index("date")["total_liquidity"])
-
-    st.markdown("---")
-
-    # ===== NEW: Collection vs Payments by Branch =====
-    st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
-    if df_cvp.empty:
-        st.info("No data in 'Collection vs Payments by Branch'. Make sure the sheet has 'Branch', 'Collection', 'Payments'.")
-    else:
-        cvp_view = st.radio("", options=["Bars", "Table", "Cards"], index=0, horizontal=True, label_visibility="collapsed")
-        cvp_sorted = df_cvp.sort_values("net", ascending=False).reset_index(drop=True)
-
-        if cvp_view == "Bars":
-            try:
-                import plotly.io as pio, plotly.graph_objects as go
-                if "brand" not in pio.templates:
-                    pio.templates["brand"] = pio.templates["plotly_white"]
-                    pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
-                    pio.templates["brand"].layout.font.family = APP_FONT
-                fig = go.Figure()
-                fig.add_bar(name="Collection", x=cvp_sorted["branch"], y=cvp_sorted["collection"])
-                fig.add_bar(name="Payments", x=cvp_sorted["branch"], y=cvp_sorted["payments"])
-                fig.update_layout(template="brand", barmode="group",
-                                  height=420, margin=dict(l=20, r=20, t=30, b=80),
-                                  xaxis_title="Branch", yaxis_title="Amount (SAR)",
-                                  legend_title_text="")
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception:
-                st.bar_chart(cvp_sorted.set_index("branch")[["collection", "payments"]])
-
-        elif cvp_view == "Table":
-            tbl = cvp_sorted.rename(columns={"branch": "Branch", "collection": "Collection", "payments": "Payments", "net": "Net"})
-            styled = style_right(tbl, num_cols=["Collection", "Payments", "Net"])
-            def _net_red(val):
-                try:
-                    return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
-                except Exception:
-                    return ''
-            styled = styled.applymap(_net_red, subset=["Net"])
-            st.dataframe(styled, use_container_width=True, height=420)
-
-        else:  # Cards
-            cols = st.columns(3)
-            for i, row in cvp_sorted.iterrows():
-                with cols[i % 3]:
-                    net = row["net"]
-                    pos = net >= 0
-                    bg = THEME["card_bg"]["low"] if pos else THEME["card_bg"]["neg"]
-                    title = "Net Surplus" if pos else "Net Deficit"
-                    net_color = "#065f46" if pos else THEME["amount_color"]["neg"]
-                    st.markdown(
-                        f"""
-                        <div class="dash-card" style="background:{bg};padding:{pad};border-radius:{radius};border:1px solid rgba(0,0,0,0.05);margin-bottom:14px;box-shadow:{shadow};">
-                            <div style="display:flex;justify-content:space-between;margin-bottom:10px;">
-                                <div style="font-weight:800;color:#0f172a;">{row['branch']}</div>
-                                <div style="opacity:.7">{title}</div>
-                            </div>
-                            <div style="display:flex;justify-content:space-between;">
-                                <div>
-                                    <div style="font-size:12px;opacity:.7">Collection</div>
-                                    <div style="font-weight:900">{fmt_currency(row['collection'])}</div>
-                                </div>
-                                <div>
-                                    <div style="font-size:12px;opacity:.7">Payments</div>
-                                    <div style="font-weight:900">{fmt_currency(row['payments'])}</div>
-                                </div>
-                            </div>
-                            <div style="text-align:right;margin-top:10px;font-weight:900;color:{net_color};">Net: {fmt_currency(net)}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-    st.markdown("---")
-
-    # ===== Quick Insights =====
-    st.markdown('<span class="section-chip">💡 Quick Insights & Recommendations</span>', unsafe_allow_html=True)
-    insights = []
-    # NOTE: We intentionally HIDE these two insights permanently:
-    #  - Top Bank Balance
-    #  - Concentration Risk
-    # Keep the others.
-
-    if not df_by_bank.empty:
-        neg_count = (df_by_bank["balance"] < 0).sum()
-        if neg_count > 0:
-            insights.append({
-                "type": "error",
-                "title": "Negative Balances",
-                "content": f"{neg_count} bank(s) show negative available balance. Review overdrafts/settlements."
-            })
-
-    if not df_pay_approved.empty and total_balance:
-        total_approved = df_pay_approved["amount"].sum()
-        if total_approved > total_balance * 0.8:
-            insights.append({
-                "type": "warning",
-                "title": "Cash Flow Alert",
-                "content": f"Approved payments ({fmt_number_only(total_approved)}) are {(total_approved/total_balance)*100:.1f}% of available balance."
-            })
-
-    if not df_lc.empty:
-        urgent7 = df_lc[df_lc["settlement_date"] <= today0 + pd.Timedelta(days=7)]
-        if not urgent7.empty:
-            insights.append({
-                "type": "error",
-                "title": "Urgent LC Settlements",
-                "content": f"{len(urgent7)} LC settlements due within 7 days totaling {fmt_number_only(urgent7['amount'].sum())}"
-            })
-
-    if not df_fm.empty and len(df_fm) > 5:
-        recent_trend = df_fm.tail(5)["total_liquidity"].pct_change().mean()
-        if pd.notna(recent_trend) and recent_trend < -0.05:
-            insights.append({
-                "type": "warning",
-                "title": "Declining Liquidity Trend",
-                "content": f"Liquidity declining by {abs(recent_trend)*100:.1f}% on average over recent periods."
-            })
-
-    if insights:
-        for ins in insights:
-            if ins["type"] == "info":
-                st.info(f"ℹ️ **{ins['title']}**: {ins['content']}")
-            elif ins["type"] == "warning":
-                st.warning(f"⚠️ **{ins['title']}**: {ins['content']}")
-            elif ins["type"] == "error":
-                st.error(f"🚨 **{ins['title']}**: {ins['content']}")
-    else:
-        st.info("💡 Insights will appear as data becomes available and patterns emerge.")
 
     # --- Footer ---
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
