@@ -35,7 +35,7 @@ except Exception:
 @dataclass
 class Config:
     FILE_ID: str = os.getenv('GOOGLE_SHEETS_ID', '1371amvaCbejUWVJI_moWdIchy5DF1lPO')
-    COMPANY_NAME: str = os.getenv('COMPANY_NAME', 'Issam Kabbani & Partners – Unitech')
+    COMPANY_NAME: str = os.getenv('COMPANY_NAME', 'Isam Kabbani & Partners – Unitech')
     LOGO_PATH: str = os.getenv('LOGO_PATH', 'ikk_logo.png')
     CACHE_TTL: int = int(os.getenv('CACHE_TTL', '300'))
     TZ: str = os.getenv('TIMEZONE', 'Asia/Riyadh')
@@ -1074,3 +1074,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
