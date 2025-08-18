@@ -7,6 +7,7 @@
 # - Light-blue headers on tables/cards
 # - Keeps: After Settlement on cards, CVP by Branch, Auto-refresh, Footer
 # - NEW: Login with streamlit-authenticator (Treasury / Finance)
+# - FIX: Convert st.secrets objects to plain dicts before Authenticate (prevents TypeError)
 
 import io
 import time
@@ -108,12 +109,10 @@ PALETTES = {
                 "card_low":"#0b1220","card_neg":"#3f1d1d","heading_bg":"#111827"},
 }
 
-# Default active palette (can be changed from sidebar)
 if "palette_name" not in st.session_state:
     st.session_state["palette_name"] = "Indigo"
 ACTIVE = PALETTES[st.session_state["palette_name"]]
 
-# Theme tokens used across components
 THEME = {
     "accent1": ACTIVE["accent1"],
     "accent2": ACTIVE["accent2"],
@@ -124,14 +123,13 @@ THEME = {
         "ok": ACTIVE["card_ok"], "low": ACTIVE["card_low"], "neg": ACTIVE["card_neg"],
     },
     "badge": {
-        "pos_bg": "rgba(5,150,105,.10)",   # greenish
-        "neg_bg": "rgba(185,28,28,.10)",   # reddish
+        "pos_bg": "rgba(5,150,105,.10)",
+        "neg_bg": "rgba(185,28,28,.10)",
     },
     "icons": {"best": "💎", "good": "🔹", "ok": "💠", "low": "💚", "neg": "⚠️"},
-    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},  # else low; negative -> neg
+    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},
 }
 
-# Subtle hover for cards + section chips
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -140,13 +138,8 @@ st.markdown(f"""
     border-radius: 6px;
     box-shadow: 0 6px 18px rgba(0,0,0,.12);
   }}
-  .dash-card {{
-    transition: transform .15s ease, box-shadow .15s ease;
-  }}
-  .dash-card:hover {{
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(0,0,0,.08);
-  }}
+  .dash-card {{ transition: transform .15s ease, box-shadow .15s ease; }}
+  .dash-card:hover {{ transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.08); }}
   .section-chip {{
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
@@ -155,12 +148,19 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ----------------------------
-# LOGIN (streamlit-authenticator 0.3.2)
+# LOGIN (streamlit-authenticator 0.3.2) — SAFE WITH st.secrets
 # ----------------------------
 def require_auth():
     import streamlit_authenticator as stauth
 
-    # Fallback credentials (bcrypt hash for password "Finance")
+    # Helper: convert any Mapping-like (e.g., Secrets) to a plain dict recursively
+    def to_plain_dict(obj):
+        try:
+            return {k: to_plain_dict(v) for k, v in obj.items()}
+        except Exception:
+            return obj
+
+    # Built-in fallback credentials (bcrypt hash for "Finance")
     fallback_credentials = {
         "usernames": {
             "Treasury": {
@@ -172,25 +172,26 @@ def require_auth():
     }
     fallback_cookie = {"name": "treasury_auth", "key": "o9-gP_kBIYY1art0Ekl9J9mev7mjJtVu", "expiry_days": 7}
 
-    # Try secrets; fall back to built-ins
+    # Try secrets → convert to plain dicts; otherwise use fallback
     try:
-        credentials = st.secrets["auth"]["credentials"]
-        cookie = st.secrets["auth"]["cookie"]
-        expiry_days = int(cookie.get("expiry_days", 7))
-        cookie_name = cookie.get("name", fallback_cookie["name"])
-        cookie_key = cookie.get("key", fallback_cookie["key"])
+        auth_section = st.secrets["auth"]           # may be a "Secrets" mapping
+        credentials = to_plain_dict(auth_section["credentials"])
+        cookie_conf = to_plain_dict(auth_section["cookie"]) if "cookie" in auth_section else {}
+        cookie_name = cookie_conf.get("name", fallback_cookie["name"])
+        cookie_key = cookie_conf.get("key", fallback_cookie["key"])
+        expiry_days = int(cookie_conf.get("expiry_days", fallback_cookie["expiry_days"]))
     except Exception:
         credentials = fallback_credentials
         cookie_name = fallback_cookie["name"]
         cookie_key = fallback_cookie["key"]
-        expiry_days = int(fallback_cookie["expiry_days"])
+        expiry_days = fallback_cookie["expiry_days"]
 
-    # IMPORTANT: pass cookie args positionally (required by streamlit-authenticator==0.3.2)
+    # streamlit-authenticator==0.3.2 requires these cookie args positionally
     authenticator = stauth.Authenticate(
         credentials,
-        cookie_name,      # positional
-        cookie_key,       # positional
-        expiry_days       # positional
+        cookie_name,
+        cookie_key,
+        expiry_days
     )
 
     name, auth_status, username = authenticator.login("Login", "main")
@@ -256,7 +257,6 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
 # Helpers: parsing + formatting
 # ----------------------------
 def _to_number(x) -> float:
-    """Convert text with commas/percent/() negatives to float; NaN on failure."""
     if pd.isna(x) or x == '':
         return np.nan
     s = str(x).strip().replace(",", "")
@@ -298,7 +298,6 @@ def fmt_number_only(v) -> str:
         return str(v)
 
 def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
-    """Right-align numeric columns, keep numbers sortable, format with separators."""
     if num_cols is None:
         num_cols = df.select_dtypes(include="number").columns
     fmt = f"{{:,.{decimals}f}}".format
@@ -486,7 +485,6 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
                     by_bank = out.groupby("bank", as_index=False).agg(agg)
                     return by_bank, datetime.now()
 
-        # Fallback: legacy layout with date columns
         raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
         bank_col = None
         for col in raw.columns:
@@ -522,7 +520,7 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         agg = {"balance": "sum"}
         if after_col: agg["after_settlement"] = "sum"
         by_bank = sub.dropna(subset=["bank"]).groupby("bank", as_index=False).agg(agg)
-        if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
+        if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"]:
             return by_bank, latest_date
     except Exception as e:
         logger.error(f"Bank balance parsing error: {e}")
@@ -744,7 +742,6 @@ def main():
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
     banks_cnt = int(df_by_bank["bank"].nunique()) if not df_by_bank.empty else 0
 
-    # Timezone-safe "today" (naive)
     try:
         today0 = pd.Timestamp.now(tz=config.TZ).floor('D').tz_localize(None)
     except Exception:
@@ -778,7 +775,6 @@ def main():
                     bal = row.get('balance', np.nan)
                     after = row.get('after_settlement', np.nan)
 
-                    # choose bucket
                     if pd.notna(bal) and bal < 0:
                         bucket = "neg"
                     elif bal > THEME["thresholds"]["best"]:
@@ -794,7 +790,6 @@ def main():
                     icon = THEME["icons"][bucket]
                     amt_color = THEME["amount_color"]["neg"] if pd.notna(bal) and bal < 0 else THEME["amount_color"]["pos"]
 
-                    # After Settlement badge
                     after_html = ""
                     if pd.notna(after):
                         as_pos = after >= 0
@@ -962,7 +957,6 @@ def main():
         st.info("No liquidity data available.")
     else:
         try:
-            # Plotly brand template
             import plotly.io as pio, plotly.graph_objects as go
             if "brand" not in pio.templates:
                 pio.templates["brand"] = pio.templates["plotly_white"]
