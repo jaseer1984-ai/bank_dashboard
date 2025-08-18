@@ -67,7 +67,7 @@ st.set_page_config(
 )
 
 # ---- Global font (one place to change) ----
-APP_FONT = os.getenv("APP_FONT", "Inter")  # e.g., "Inter", "Poppins", "Rubik"
+APP_FONT = os.getenv("APP_FONT", "Inter")  # e.g., "Inter", "Poppins", "Rubik")
 
 def set_app_font(family: str = APP_FONT):
     css = """
@@ -484,7 +484,6 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
             return pd.DataFrame()
 
-        # Amount column detection
         amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
         if not amt_col:
             logger.error("No amount column found in supplier payments"); return pd.DataFrame()
@@ -494,12 +493,11 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
             "supplier": d.get("supplier", ""),
             "currency": d.get("currency", ""),
             "amount": d[amt_col].map(_to_number),
-            # keep original but prettified for display
             "status": d["status"].astype(str).str.strip().str.title()
         })
 
         out = out.dropna(subset=["amount"])
-        out = out[out["bank"].ne("")]  # basic clean
+        out = out[out["bank"].ne("")]
         return out
     except Exception as e:
         logger.error(f"Supplier payments parsing error: {e}")
@@ -1051,29 +1049,47 @@ def main():
     # ===== Quick Insights =====
     st.markdown('<span class="section-chip">💡 Quick Insights & Recommendations</span>', unsafe_allow_html=True)
     insights = []
+    # NOTE: We intentionally HIDE these two insights permanently:
+    #  - Top Bank Balance
+    #  - Concentration Risk
+    # Keep the others.
+
     if not df_by_bank.empty:
-        top_bank = df_by_bank.sort_values("balance", ascending=False).iloc[0]
-        insights.append({"type": "info", "title": "Top Bank Balance", "content": f"**{top_bank['bank']}** holds the highest balance: {fmt_number_only(top_bank['balance'])}"})
-        total_bal = df_by_bank["balance"].sum()
         neg_count = (df_by_bank["balance"] < 0).sum()
         if neg_count > 0:
-            insights.append({"type": "error", "title": "Negative Balances", "content": f"{neg_count} bank(s) show negative available balance. Review overdrafts/settlements."})
-        if total_bal:
-            top_3_pct = df_by_bank.nlargest(3, "balance")["balance"].sum() / total_bal * 100
-            if top_3_pct > 80:
-                insights.append({"type": "warning", "title": "Concentration Risk", "content": f"Top 3 banks hold {top_3_pct:.1f}% of total balance. Consider diversification."})
+            insights.append({
+                "type": "error",
+                "title": "Negative Balances",
+                "content": f"{neg_count} bank(s) show negative available balance. Review overdrafts/settlements."
+            })
+
     if not df_pay_approved.empty and total_balance:
         total_approved = df_pay_approved["amount"].sum()
         if total_approved > total_balance * 0.8:
-            insights.append({"type": "warning", "title": "Cash Flow Alert", "content": f"Approved payments ({fmt_number_only(total_approved)}) are {(total_approved/total_balance)*100:.1f}% of available balance."})
+            insights.append({
+                "type": "warning",
+                "title": "Cash Flow Alert",
+                "content": f"Approved payments ({fmt_number_only(total_approved)}) are {(total_approved/total_balance)*100:.1f}% of available balance."
+            })
+
     if not df_lc.empty:
         urgent7 = df_lc[df_lc["settlement_date"] <= today0 + pd.Timedelta(days=7)]
         if not urgent7.empty:
-            insights.append({"type": "error", "title": "Urgent LC Settlements", "content": f"{len(urgent7)} LC settlements due within 7 days totaling {fmt_number_only(urgent7['amount'].sum())}"})
+            insights.append({
+                "type": "error",
+                "title": "Urgent LC Settlements",
+                "content": f"{len(urgent7)} LC settlements due within 7 days totaling {fmt_number_only(urgent7['amount'].sum())}"
+            })
+
     if not df_fm.empty and len(df_fm) > 5:
         recent_trend = df_fm.tail(5)["total_liquidity"].pct_change().mean()
         if pd.notna(recent_trend) and recent_trend < -0.05:
-            insights.append({"type": "warning", "title": "Declining Liquidity Trend", "content": f"Liquidity declining by {abs(recent_trend)*100:.1f}% on average over recent periods."})
+            insights.append({
+                "type": "warning",
+                "title": "Declining Liquidity Trend",
+                "content": f"Liquidity declining by {abs(recent_trend)*100:.1f}% on average over recent periods."
+            })
+
     if insights:
         for ins in insights:
             if ins["type"] == "info":
