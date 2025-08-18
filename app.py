@@ -112,7 +112,7 @@ if "palette_name" not in st.session_state:
     st.session_state["palette_name"] = "Indigo"
 ACTIVE = PALETTES[st.session_state["palette_name"]]
 
-# Theme tokens used across components
+# Theme tokens
 THEME = {
     "accent1": ACTIVE["accent1"],
     "accent2": ACTIVE["accent2"],
@@ -127,10 +127,10 @@ THEME = {
         "neg_bg": "rgba(185,28,28,.10)",   # reddish
     },
     "icons": {"best": "💎", "good": "🔹", "ok": "💠", "low": "💚", "neg": "⚠️"},
-    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},  # else low; negative -> neg
+    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},
 }
 
-# Subtle hover for cards + section chips
+# Subtle hover + chips
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -139,13 +139,8 @@ st.markdown(f"""
     border-radius: 6px;
     box-shadow: 0 6px 18px rgba(0,0,0,.12);
   }}
-  .dash-card {{
-    transition: transform .15s ease, box-shadow .15s ease;
-  }}
-  .dash-card:hover {{
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(0,0,0,.08);
-  }}
+  .dash-card {{ transition: transform .15s ease, box-shadow .15s ease; }}
+  .dash-card:hover {{ transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.08); }}
   .section-chip {{
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
@@ -306,11 +301,12 @@ def read_csv(url: str) -> pd.DataFrame:
 def display_as_list(df, bank_col="bank", amount_col="balance", title="Bank Balances"):
     st.markdown(f"<span class='section-chip'>{title}</span>", unsafe_allow_html=True)
     for _, row in df.iterrows():
+        color = THEME['amount_color']['neg'] if pd.notna(row[amount_col]) and row[amount_col] < 0 else THEME['amount_color']['pos']
         st.markdown(
             f"""
             <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #e2e8f0;">
                 <span style="font-weight:700; color:#1e293b;">{row[bank_col]}</span>
-                <span style="font-weight:800; color:{THEME['amount_color']['pos']};">{fmt_currency(row[amount_col])}</span>
+                <span style="font-weight:800; color:{color};">{fmt_currency(row[amount_col])}</span>
             </div>
             """,
             unsafe_allow_html=True
@@ -475,24 +471,35 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
     return pd.DataFrame(), None
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return ALL supplier payments with normalized columns.
+    Do NOT filter by status here; filtering is done in the UI (Approved / Released tabs).
+    """
     try:
-        d = cols_lower(df).rename(columns={"supplier name": "supplier", "amount(sar)": "amount_sar", "order/sh/branch": "order_branch"})
+        d = cols_lower(df).rename(
+            columns={"supplier name": "supplier",
+                     "amount(sar)": "amount_sar",
+                     "order/sh/branch": "order_branch"}
+        )
         if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
             return pd.DataFrame()
-        status_norm = d["status"].astype("string").str.strip().str.lower()
-        mask = status_norm.str_contains(r"\bapproved\b", regex=True, na=False) if hasattr(status_norm, "str_contains") else status_norm.str.contains(r"\bapproved\b", na=False)
-        if not mask.any():
-            logger.info("No approved payments found"); return pd.DataFrame()
-        d = d.loc[mask].copy()
+
+        # Amount column detection
         amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
         if not amt_col:
             logger.error("No amount column found in supplier payments"); return pd.DataFrame()
-        d["amount"] = d[amt_col].map(_to_number)
-        d["bank"] = d["bank"].astype(str).str.strip()
-        keep = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in d.columns]
-        out = d[keep].dropna(subset=["amount"]).copy()
-        if "status" in out.columns:
-            out["status"] = out["status"].astype(str).str.title()
+
+        out = pd.DataFrame({
+            "bank": d["bank"].astype(str).str.strip(),
+            "supplier": d.get("supplier", ""),
+            "currency": d.get("currency", ""),
+            "amount": d[amt_col].map(_to_number),
+            # keep original but prettified for display
+            "status": d["status"].astype(str).str.strip().str.title()
+        })
+
+        out = out.dropna(subset=["amount"])
+        out = out[out["bank"].ne("")]  # basic clean
         return out
     except Exception as e:
         logger.error(f"Supplier payments parsing error: {e}")
@@ -651,12 +658,21 @@ def main():
 
     try:
         df_pay_raw = read_csv(LINKS["SUPPLIER PAYMENTS"])
-        df_pay = parse_supplier_payments(df_pay_raw)
+        df_pay = parse_supplier_payments(df_pay_raw)  # returns ALL statuses
         data_status['supplier_payments'] = 'success' if not df_pay.empty else 'warning'
     except Exception as e:
         logger.error(f"Supplier payments processing failed: {e}")
         df_pay = pd.DataFrame()
         data_status['supplier_payments'] = 'error'
+
+    # Build Approved/Released subsets for UI + KPIs
+    if not df_pay.empty:
+        status_lower = df_pay["status"].astype(str).str.lower()
+        df_pay_approved = df_pay[status_lower.str.contains("approved", na=False)].copy()
+        df_pay_released = df_pay[status_lower.str.contains("released", na=False)].copy()
+    else:
+        df_pay_approved = pd.DataFrame()
+        df_pay_released = pd.DataFrame()
 
     try:
         df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
@@ -689,7 +705,7 @@ def main():
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
     banks_cnt = int(df_by_bank["bank"].nunique()) if not df_by_bank.empty else 0
 
-    # Timezone-safe "today" (naive)
+    # Timezone-safe "today"
     try:
         today0 = pd.Timestamp.now(tz=config.TZ).floor('D').tz_localize(None)
     except Exception:
@@ -697,7 +713,7 @@ def main():
 
     next4 = today0 + pd.Timedelta(days=3)
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
-    approved_sum = float(df_pay["amount"].sum()) if not df_pay.empty else 0.0
+    approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0  # keep KPI semantics
 
     # Sidebar
     render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt)
@@ -781,24 +797,26 @@ def main():
     st.markdown("---")
 
     # ===== Supplier Payments =====
-    st.markdown('<span class="section-chip">💰 Approved Payments</span>', unsafe_allow_html=True)
-    if df_pay.empty:
-        st.info("No approved payments found.")
-    else:
+    st.markdown('<span class="section-chip">💰 Supplier Payments</span>', unsafe_allow_html=True)
+
+    def render_payments_tab(df_src: pd.DataFrame, status_label: str, key_suffix: str):
+        if df_src.empty:
+            st.info(f"No {status_label.lower()} payments found.")
+            return
         col1, col2 = st.columns([2, 1])
         with col1:
-            banks = sorted(df_pay["bank"].dropna().unique())
-            pick_banks = st.multiselect("Filter by Bank", banks, default=banks)
+            banks = sorted(df_src["bank"].dropna().unique())
+            pick_banks = st.multiselect("Filter by Bank", banks, default=banks, key=f"banks_{key_suffix}")
         with col2:
-            min_amount = st.number_input("Minimum Amount", min_value=0, value=0)
+            min_amount = st.number_input("Minimum Amount", min_value=0, value=0, key=f"min_{key_suffix}")
 
-        view_data = df_pay[(df_pay["bank"].isin(pick_banks)) & (df_pay["amount"] >= min_amount)].copy()
+        view_data = df_src[(df_src["bank"].isin(pick_banks)) & (df_src["amount"] >= min_amount)].copy()
         if not view_data.empty:
             payment_view = st.radio("Display as:", options=["Summary + Table", "Mini Cards", "List", "Progress Bars"],
-                                    index=0, horizontal=True, key="payment_view")
+                                    index=0, horizontal=True, key=f"payment_view_{key_suffix}")
             if payment_view == "Summary + Table":
                 c1, c2, c3 = st.columns(3)
-                with c1: st.metric("Total Amount", fmt_number_only(view_data["amount"].sum()))
+                with c1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
                 with c2: st.metric("Number of Payments", len(view_data))
                 with c3: st.metric("Average Payment", fmt_number_only(view_data["amount"].mean()))
 
@@ -819,12 +837,21 @@ def main():
                 display_as_mini_cards(bank_totals, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
             elif payment_view == "List":
                 bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                display_as_list(bank_totals, "bank", "balance", "Approved Payments by Bank")
+                display_as_list(bank_totals, "bank", "balance", f"{status_label} Payments by Bank")
             elif payment_view == "Progress Bars":
                 bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                 display_as_progress_bars(bank_totals, "bank", "balance")
         else:
             st.info("No payments match the selected criteria.")
+
+    if df_pay.empty and df_pay_approved.empty and df_pay_released.empty:
+        st.info("No supplier payments found.")
+    else:
+        tab_approved, tab_released = st.tabs(["Approved", "Released"])
+        with tab_approved:
+            render_payments_tab(df_pay_approved, "Approved", "approved")
+        with tab_released:
+            render_payments_tab(df_pay_released, "Released", "released")
 
     st.markdown("---")
 
@@ -1035,8 +1062,8 @@ def main():
             top_3_pct = df_by_bank.nlargest(3, "balance")["balance"].sum() / total_bal * 100
             if top_3_pct > 80:
                 insights.append({"type": "warning", "title": "Concentration Risk", "content": f"Top 3 banks hold {top_3_pct:.1f}% of total balance. Consider diversification."})
-    if not df_pay.empty and total_balance:
-        total_approved = df_pay["amount"].sum()
+    if not df_pay_approved.empty and total_balance:
+        total_approved = df_pay_approved["amount"].sum()
         if total_approved > total_balance * 0.8:
             insights.append({"type": "warning", "title": "Cash Flow Alert", "content": f"Approved payments ({fmt_number_only(total_approved)}) are {(total_approved/total_balance)*100:.1f}% of available balance."})
     if not df_lc.empty:
@@ -1074,4 +1101,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
