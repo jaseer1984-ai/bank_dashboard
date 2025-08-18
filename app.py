@@ -1,4 +1,4 @@
-# app.py — Enhanced Treasury Dashboard (Themed) + Simple Login
+# app.py — Enhanced Treasury Dashboard (Themed) + Login
 # - Central THEME palettes + picker (Indigo/Teal/Emerald/Dark)
 # - Density toggle (Compact vs. Comfy)
 # - Section "chips" and subtle card hover
@@ -6,8 +6,7 @@
 # - Negative balances: light-red card + red amount (no clamping)
 # - Light-blue headers on tables/cards
 # - Keeps: After Settlement on cards, CVP by Branch, Auto-refresh, Footer
-# - NEW: Login using streamlit-authenticator.
-#        Uses Streamlit Secrets if present; otherwise falls back to Username=Treasury / Password=Finance.
+# - NEW: Login with streamlit-authenticator (Treasury / Finance)
 
 import io
 import time
@@ -67,53 +66,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
     page_icon="💰",
 )
-
-# ---- Authentication (Username: Treasury, Password: Finance) ----
-# Tries to load from Streamlit Secrets; else uses a safe fallback with a bcrypt hash for "Finance".
-def require_auth():
-    import streamlit_authenticator as stauth
-
-    # Fallback credentials (bcrypt hash for "Finance")
-    fallback_credentials = {
-        "usernames": {
-            "Treasury": {
-                "name": "Treasury",
-                "email": "treasury@example.com",
-                # bcrypt hash for the password: Finance  (case-sensitive)
-                "password": "$2b$12$O8.XwkqMrGMZqOb9XQmZrO1dIyZafB3pOdzrx2M7U9o0.Wm3fqgvu",
-            }
-        }
-    }
-    fallback_cookie = {"name": "treasury_auth", "key": "o9-gP_kBIYY1art0Ekl9J9mev7mjJtVu", "expiry_days": 7}
-
-    try:
-        credentials = st.secrets["auth"]["credentials"]
-        cookie = st.secrets["auth"]["cookie"]
-    except Exception:
-        credentials = fallback_credentials
-        cookie = fallback_cookie
-
-    authenticator = stauth.Authenticate(
-        credentials,
-        cookie_name=cookie["name"],
-        key=cookie["key"],
-        cookie_expiry_days=int(cookie["expiry_days"]),
-    )
-
-    name, auth_status, username = authenticator.login("Login", "main")
-
-    if auth_status is False:
-        st.error("Invalid username or password.")
-        st.stop()
-    elif auth_status is None:
-        st.info("Please enter your username and password.")
-        st.stop()
-
-    authenticator.logout("Logout", "sidebar")
-    st.sidebar.success(f"Signed in as {name}")
-
-require_auth()
-# -----------------------------------------------------------------
 
 # ---- Global font (one place to change) ----
 APP_FONT = os.getenv("APP_FONT", "Inter")  # e.g., "Inter", "Poppins", "Rubik"
@@ -201,6 +153,60 @@ st.markdown(f"""
   }}
 </style>
 """, unsafe_allow_html=True)
+
+# ----------------------------
+# LOGIN (streamlit-authenticator 0.3.2)
+# ----------------------------
+def require_auth():
+    import streamlit_authenticator as stauth
+
+    # Fallback credentials (bcrypt hash for password "Finance")
+    fallback_credentials = {
+        "usernames": {
+            "Treasury": {
+                "name": "Treasury",
+                "email": "treasury@example.com",
+                "password": "$2b$12$O8.XwkqMrGMZqOb9XQmZrO1dIyZafB3pOdzrx2M7U9o0.Wm3fqgvu",
+            }
+        }
+    }
+    fallback_cookie = {"name": "treasury_auth", "key": "o9-gP_kBIYY1art0Ekl9J9mev7mjJtVu", "expiry_days": 7}
+
+    # Try secrets; fall back to built-ins
+    try:
+        credentials = st.secrets["auth"]["credentials"]
+        cookie = st.secrets["auth"]["cookie"]
+        expiry_days = int(cookie.get("expiry_days", 7))
+        cookie_name = cookie.get("name", fallback_cookie["name"])
+        cookie_key = cookie.get("key", fallback_cookie["key"])
+    except Exception:
+        credentials = fallback_credentials
+        cookie_name = fallback_cookie["name"]
+        cookie_key = fallback_cookie["key"]
+        expiry_days = int(fallback_cookie["expiry_days"])
+
+    # IMPORTANT: pass cookie args positionally (required by streamlit-authenticator==0.3.2)
+    authenticator = stauth.Authenticate(
+        credentials,
+        cookie_name,      # positional
+        cookie_key,       # positional
+        expiry_days       # positional
+    )
+
+    name, auth_status, username = authenticator.login("Login", "main")
+
+    if auth_status is False:
+        st.error("Invalid username or password.")
+        st.stop()
+    elif auth_status is None:
+        st.info("Please enter your username and password.")
+        st.stop()
+
+    authenticator.logout("Logout", "sidebar")
+    st.sidebar.success(f"Signed in as {name}")
+
+# Gate the whole app
+require_auth()
 
 # ----------------------------
 # HTTP with retry
@@ -1089,6 +1095,7 @@ def main():
         if total_approved > total_balance * 0.8:
             insights.append({"type": "warning", "title": "Cash Flow Alert", "content": f"Approved payments ({fmt_number_only(total_approved)}) are {(total_approved/total_balance)*100:.1f}% of available balance."})
     if not df_lc.empty:
+        today0 = pd.Timestamp.today().floor('D')
         urgent7 = df_lc[df_lc["settlement_date"] <= today0 + pd.Timedelta(days=7)]
         if not urgent7.empty:
             insights.append({"type": "error", "title": "Urgent LC Settlements", "content": f"{len(urgent7)} LC settlements due within 7 days totaling {fmt_number_only(urgent7['amount'].sum())}"})
