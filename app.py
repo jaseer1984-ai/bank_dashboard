@@ -586,37 +586,58 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
         st.error(f"❌ Branch CVP parsing failed: {str(e)}")
         return pd.DataFrame()
 
-# NEW: parse exchange rate sheet (wide dates -> long)
+# --- REPLACE the existing parse_exchange_rate with this version ---
 def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Expect a first column 'Currency' and subsequent columns as dates like '18-Aug-2025', '19-Aug-2025', ...
+    Supports both layouts:
+    A) Date-first (your sheet):  DATE | USD | AED | EUR | QAR ...
+    B) Currency-first:           Currency | 18-Aug-2025 | 19-Aug-2025 | ...
+
     Returns long format: currency | date | rate
     """
     try:
         d = df.copy()
-        # Clean header quotes/spacing
-        d.columns = [str(c).strip().strip('"').strip("'") for c in d.columns]
-        # Find currency column
-        cur_col = next((c for c in d.columns if "currency" in str(c).lower()), d.columns[0])
-        # Identify date columns by successful parse
-        parsed = pd.to_datetime(pd.Index([c for c in d.columns if c != cur_col]), errors="coerce", dayfirst=True)
-        date_cols = [col for col, dt_ in zip([c for c in d.columns if c != cur_col], parsed) if pd.notna(dt_)]
-        if not date_cols:
-            return pd.DataFrame()
 
-        # Melt to long
-        long_df = d.melt(id_vars=[cur_col], value_vars=date_cols, var_name="date", value_name="rate").rename(
-            columns={cur_col: "currency"}
-        )
-        # Parse date strings to datetime (dayfirst for '18-Aug-2025')
-        long_df["date"] = pd.to_datetime(long_df["date"], errors="coerce", dayfirst=True)
-        # Coerce numeric
-        long_df["rate"] = long_df["rate"].map(_to_number)
-        # Clean
-        long_df["currency"] = long_df["currency"].astype(str).str.strip()
+        # Clean headers
+        d.columns = [str(c).strip().strip('"').strip("'") for c in d.columns]
+
+        # Detect orientation
+        has_date_col = any("date" in c.lower() for c in d.columns)
+        if has_date_col:
+            # Layout A: DATE column + currency columns
+            date_col = next(c for c in d.columns if "date" in c.lower())
+            # keep only non-empty numeric-ish columns besides date
+            value_cols = [c for c in d.columns if c != date_col]
+            # Melt to long
+            long_df = d.melt(id_vars=[date_col], value_vars=value_cols,
+                             var_name="currency", value_name="rate")
+            long_df = long_df.rename(columns={date_col: "date"})
+            # Parse
+            long_df["date"] = pd.to_datetime(long_df["date"], errors="coerce", dayfirst=True)
+            long_df["currency"] = long_df["currency"].astype(str).str.strip()
+            long_df["rate"] = long_df["rate"].map(_to_number)
+
+        else:
+            # Layout B: Currency first column + date columns
+            cur_col = next((c for c in d.columns if "currency" in c.lower()), d.columns[0])
+            # Identify date-like columns by parsing the header text
+            candidate_cols = [c for c in d.columns if c != cur_col]
+            parsed = pd.to_datetime(pd.Index(candidate_cols), errors="coerce", dayfirst=True)
+            date_cols = [col for col, dt_ in zip(candidate_cols, parsed) if pd.notna(dt_)]
+            if not date_cols:
+                return pd.DataFrame()
+            long_df = d.melt(id_vars=[cur_col], value_vars=date_cols,
+                             var_name="date", value_name="rate").rename(columns={cur_col: "currency"})
+            long_df["date"] = pd.to_datetime(long_df["date"], errors="coerce", dayfirst=True)
+            long_df["currency"] = long_df["currency"].astype(str).str.strip()
+            long_df["rate"] = long_df["rate"].map(_to_number)
+
+        # Clean + sort
         long_df = long_df.dropna(subset=["currency", "date", "rate"])
-        long_df = long_df.sort_values(["currency", "date"])
+        long_df = long_df[long_df["currency"] != ""]
+        long_df = long_df.sort_values(["currency", "date"]).reset_index(drop=True)
         return long_df
+
     except Exception as e:
         logger.error(f"Exchange rate parsing error: {e}")
         st.error(f"❌ Exchange rate parsing failed: {str(e)}")
@@ -1249,3 +1270,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
