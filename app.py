@@ -10,6 +10,7 @@
 # - Key Metrics above Controls in sidebar
 # - Quick Insights near top-left; hides Top Bank & Concentration Risk items
 # - Adds insights for negative banks (balance) and negative after-settlement
+# - NEW: Sidebar button to toggle Exchange Rate section (💱) in main area
 
 import io
 import time
@@ -179,6 +180,8 @@ LINKS = {
     "SETTLEMENTS": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=978859477",
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
+    # NEW: Exchange Rate sheet (gid from your link: 58540369)
+    "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
 }
 
 # ----------------------------
@@ -583,6 +586,42 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
         st.error(f"❌ Branch CVP parsing failed: {str(e)}")
         return pd.DataFrame()
 
+# NEW: parse exchange rate sheet (wide dates -> long)
+def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expect a first column 'Currency' and subsequent columns as dates like '18-Aug-2025', '19-Aug-2025', ...
+    Returns long format: currency | date | rate
+    """
+    try:
+        d = df.copy()
+        # Clean header quotes/spacing
+        d.columns = [str(c).strip().strip('"').strip("'") for c in d.columns]
+        # Find currency column
+        cur_col = next((c for c in d.columns if "currency" in str(c).lower()), d.columns[0])
+        # Identify date columns by successful parse
+        parsed = pd.to_datetime(pd.Index([c for c in d.columns if c != cur_col]), errors="coerce", dayfirst=True)
+        date_cols = [col for col, dt_ in zip([c for c in d.columns if c != cur_col], parsed) if pd.notna(dt_)]
+        if not date_cols:
+            return pd.DataFrame()
+
+        # Melt to long
+        long_df = d.melt(id_vars=[cur_col], value_vars=date_cols, var_name="date", value_name="rate").rename(
+            columns={cur_col: "currency"}
+        )
+        # Parse date strings to datetime (dayfirst for '18-Aug-2025')
+        long_df["date"] = pd.to_datetime(long_df["date"], errors="coerce", dayfirst=True)
+        # Coerce numeric
+        long_df["rate"] = long_df["rate"].map(_to_number)
+        # Clean
+        long_df["currency"] = long_df["currency"].astype(str).str.strip()
+        long_df = long_df.dropna(subset=["currency", "date", "rate"])
+        long_df = long_df.sort_values(["currency", "date"])
+        return long_df
+    except Exception as e:
+        logger.error(f"Exchange rate parsing error: {e}")
+        st.error(f"❌ Exchange rate parsing failed: {str(e)}")
+        return pd.DataFrame()
+
 # ----------------------------
 # Header
 # ----------------------------
@@ -600,7 +639,7 @@ def render_header():
         st.caption(f"Enhanced Treasury Dashboard — Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ----------------------------
-# Sidebar (Refresh, then Key Metrics, then Controls)
+# Sidebar (Refresh, then Key Metrics, then Controls, + FX toggle)
 # ----------------------------
 def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt):
     with st.sidebar:
@@ -609,6 +648,13 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
         if st.button("Refresh Now", type="primary", use_container_width=True):
             st.cache_data.clear()
             logger.info("Manual refresh triggered (sidebar)")
+            st.rerun()
+
+        # --- FX TOGGLE BUTTON ---
+        if "show_fx" not in st.session_state:
+            st.session_state["show_fx"] = False
+        if st.button("📈 Exchange Rates", use_container_width=True, help="Show/Hide exchange rate chart"):
+            st.session_state["show_fx"] = not st.session_state["show_fx"]
             st.rerun()
 
         # --- KEY METRICS ---
@@ -715,6 +761,16 @@ def main():
         df_cvp = pd.DataFrame()
         data_status['collection_branch'] = 'error'
 
+    # NEW: Exchange Rate data
+    try:
+        df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
+        df_fx = parse_exchange_rate(df_fx_raw)
+        data_status['exchange_rate'] = 'success' if not df_fx.empty else 'warning'
+    except Exception as e:
+        logger.error(f"Exchange rate processing failed: {e}")
+        df_fx = pd.DataFrame()
+        data_status['exchange_rate'] = 'error'
+
     # KPIs
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
     banks_cnt = int(df_by_bank["bank"].nunique()) if not df_by_bank.empty else 0
@@ -729,7 +785,7 @@ def main():
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0  # KPI uses Approved only
 
-    # Sidebar (refresh, metrics, then controls)
+    # Sidebar (refresh, metrics, then controls, + FX toggle)
     render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt)
 
     # Density tokens
@@ -799,6 +855,58 @@ def main():
         st.info("💡 Insights will appear as data becomes available and patterns emerge.")
 
     st.markdown("---")
+
+    # ===== NEW: Exchange Rate — Variation (shown when sidebar button toggled) =====
+    if st.session_state.get("show_fx", False):
+        st.markdown('<span class="section-chip">💱 Exchange Rate — Variation</span>', unsafe_allow_html=True)
+        if df_fx.empty:
+            st.info("No exchange rate data.")
+        else:
+            # Controls
+            all_curr = sorted(df_fx["currency"].unique().tolist())
+            default_pick = [c for c in ["USD", "AED", "EUR", "QAR"] if c in all_curr] or all_curr[:3]
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                pick_curr = st.multiselect("Currencies", all_curr, default=default_pick, key="fx_curr")
+            with col2:
+                dmin = df_fx["date"].min().date()
+                dmax = df_fx["date"].max().date()
+                start_d = st.date_input("From", value=dmin, min_value=dmin, max_value=dmax, key="fx_from")
+                end_d = st.date_input("To", value=dmax, min_value=dmin, max_value=dmax, key="fx_to")
+
+            view_fx = df_fx[
+                (df_fx["currency"].isin(pick_curr)) &
+                (df_fx["date"].dt.date >= start_d) &
+                (df_fx["date"].dt.date <= end_d)
+            ].copy()
+
+            if view_fx.empty:
+                st.info("No data for the selected filters.")
+            else:
+                try:
+                    import plotly.io as pio, plotly.graph_objects as go
+                    if "brand" not in pio.templates:
+                        pio.templates["brand"] = pio.templates["plotly_white"]
+                        pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                        pio.templates["brand"].layout.font.family = APP_FONT
+                        pio.templates["brand"].layout.paper_bgcolor = "white"
+                        pio.templates["brand"].layout.plot_bgcolor = "white"
+
+                    fig = go.Figure()
+                    for cur in pick_curr:
+                        sub = view_fx[view_fx["currency"] == cur]
+                        if not sub.empty:
+                            fig.add_trace(go.Scatter(x=sub["date"], y=sub["rate"], mode="lines+markers", name=cur))
+                    fig.update_layout(template="brand", height=420,
+                                      margin=dict(l=20, r=20, t=40, b=20),
+                                      title="Daily Exchange Rate Variation",
+                                      xaxis_title="Date", yaxis_title="Rate (SAR)")
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    logger.error(f"FX chart error: {e}")
+                    st.line_chart(view_fx.pivot_table(index="date", columns="currency", values="rate"))
+
+        st.markdown("---")
 
     # ===== Bank Balance =====
     st.markdown('<span class="section-chip">🏦 Bank Balance</span>', unsafe_allow_html=True)
