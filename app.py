@@ -6,9 +6,11 @@
 # - Negative balances: light-red card + red amount (no clamping)
 # - Light-blue headers on tables/cards
 # - Keeps: After Settlement on cards, CVP by Branch, Auto-refresh, Footer
-# - Refresh button at top-left; Key Metrics above Controls in sidebar
+# - Refresh button in sidebar (above Key Metrics)
+# - Key Metrics above Controls in sidebar
 # - Quick Insights near top-left; hides Top Bank & Concentration Risk items
 # - Adds insights for negative banks (balance) and negative after-settlement
+# - Adds "Time — Riyadh Region" card in sidebar
 
 import io
 import time
@@ -599,11 +601,31 @@ def render_header():
         st.caption(f"Enhanced Treasury Dashboard — Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ----------------------------
-# Sidebar (Key Metrics first, then Controls; theme at bottom)
+# Sidebar (Refresh + Time, then Key Metrics, then Controls)
 # ----------------------------
 def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt):
     with st.sidebar:
-        # --- KEY METRICS FIRST ---
+        # --- REFRESH (above metrics) ---
+        st.markdown("### 🔄 Refresh")
+        if st.button("Refresh Now", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            logger.info("Manual refresh triggered (sidebar)")
+            st.rerun()
+
+        # --- TIME — RIYADH REGION ---
+        now_riyadh = pd.Timestamp.now(tz=config.TZ)
+        st.markdown(
+            f"""
+            <div style="background:{THEME['heading_bg']};border:1px solid {THEME['accent1']};
+                        border-radius:12px;padding:12px;margin:8px 0 16px 0;box-shadow:0 1px 6px rgba(0,0,0,.04);">
+                <div style="font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.08em;">Time — Riyadh Region</div>
+                <div style="font-size:16px;font-weight:800;color:#111827;text-align:right;">{now_riyadh.strftime('%Y-%m-%d %H:%M:%S')}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # --- KEY METRICS ---
         st.markdown("### 📊 Key Metrics")
 
         def _kpi(title, value, bg, border, color):
@@ -623,7 +645,7 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
 
         st.markdown("---")
 
-        # --- CONTROLS BELOW METRICS ---
+        # --- CONTROLS ---
         st.markdown("### ⚙️ Controls")
         do_auto = st.toggle("Auto refresh",
                             value=st.session_state.get("auto_refresh", False),
@@ -643,22 +665,11 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
         density = st.toggle("Compact density", value=st.session_state.get("compact_density", False))
         st.session_state["compact_density"] = density
 
-        # NOTE: the old sidebar refresh button is intentionally removed (moved to top-left)
-
 # ----------------------------
 # Main
 # ----------------------------
 def main():
     render_header()
-
-    # --- TOP-LEFT REFRESH BUTTON ---
-    left_btn, _ = st.columns([0.25, 0.75])
-    with left_btn:
-        if st.button("🔄 Refresh Now", type="primary", help="Reload all data"):
-            st.cache_data.clear()
-            logger.info("Manual refresh triggered (top-left)")
-            st.rerun()
-
     st.markdown("")
 
     data_status = {}
@@ -732,7 +743,7 @@ def main():
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0  # KPI uses Approved only
 
-    # Sidebar (metrics first, then controls)
+    # Sidebar (refresh + time, metrics, then controls)
     render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt)
 
     # Density tokens
@@ -740,14 +751,14 @@ def main():
     radius = "10px" if st.session_state.get("compact_density", False) else "12px"
     shadow = "0 1px 6px rgba(0,0,0,.06)" if st.session_state.get("compact_density", False) else "0 2px 8px rgba(0,0,0,.10)"
 
-    # ===== Quick Insights (moved near top-left) =====
+    # ===== Quick Insights (near top-left) =====
     st.markdown('<span class="section-chip">💡 Quick Insights & Recommendations</span>', unsafe_allow_html=True)
     insights = []
 
-    # NOTE: We intentionally DO NOT add "Top Bank Balance" or "Concentration Risk" insights
+    # (Intentionally hide "Top Bank Balance" and "Concentration Risk" insights)
 
     if not df_by_bank.empty:
-        # Insight 1: Negative bank balances
+        # Negative available balances
         neg_rows = df_by_bank[df_by_bank["balance"] < 0].copy()
         if not neg_rows.empty:
             cnt = len(neg_rows)
@@ -759,7 +770,7 @@ def main():
                 "content": f"{cnt} bank(s) show negative available balance (total {fmt_number_only(total_neg)}). Affected: {names}."
             })
 
-        # Insight 2: Negative After-Settlement balances (if available)
+        # Negative After-Settlement balances (if present)
         if "after_settlement" in df_by_bank.columns:
             neg_after = df_by_bank[df_by_bank["after_settlement"] < 0].copy()
             if not neg_after.empty:
