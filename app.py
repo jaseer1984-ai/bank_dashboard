@@ -10,7 +10,6 @@
 # - Key Metrics above Controls in sidebar
 # - Quick Insights near top-left; hides Top Bank & Concentration Risk items
 # - Adds insights for negative banks (balance) and negative after-settlement
-# - Adds "Time — Riyadh Region" card in sidebar
 
 import io
 import time
@@ -601,7 +600,7 @@ def render_header():
         st.caption(f"Enhanced Treasury Dashboard — Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ----------------------------
-# Sidebar (Refresh + Time, then Key Metrics, then Controls)
+# Sidebar (Refresh, then Key Metrics, then Controls)
 # ----------------------------
 def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt):
     with st.sidebar:
@@ -611,19 +610,6 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
             st.cache_data.clear()
             logger.info("Manual refresh triggered (sidebar)")
             st.rerun()
-
-        # --- TIME — RIYADH REGION ---
-        now_riyadh = pd.Timestamp.now(tz=config.TZ)
-        st.markdown(
-            f"""
-            <div style="background:{THEME['heading_bg']};border:1px solid {THEME['accent1']};
-                        border-radius:12px;padding:12px;margin:8px 0 16px 0;box-shadow:0 1px 6px rgba(0,0,0,.04);">
-                <div style="font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.08em;">Time — Riyadh Region</div>
-                <div style="font-size:16px;font-weight:800;color:#111827;text-align:right;">{now_riyadh.strftime('%Y-%m-%d %H:%M:%S')}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
 
         # --- KEY METRICS ---
         st.markdown("### 📊 Key Metrics")
@@ -743,7 +729,7 @@ def main():
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0  # KPI uses Approved only
 
-    # Sidebar (refresh + time, metrics, then controls)
+    # Sidebar (refresh, metrics, then controls)
     render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt)
 
     # Density tokens
