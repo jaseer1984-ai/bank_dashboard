@@ -1061,7 +1061,7 @@ def main():
     # --- Footer ---
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown(
-        "<div style='text-align:center; opacity:0.8; font-size:12px;'>Created By <strong>Jaseer Pykkarathodi</strong></div>",
+        "<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>",
         unsafe_allow_html=True
     )
 
@@ -1074,3 +1074,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
