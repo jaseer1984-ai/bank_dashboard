@@ -588,55 +588,51 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 # --- Exchange Rate parser (supports Date-first and Currency-first layouts)
+# app.py — Enhanced Treasury Dashboard (Themed + Exchange Rate Spike Detector)
+
+# ... [imports, Config, logging, theming etc. remain the same as your baseline code above] ...
+
+# ----------------------------
+# Exchange Rate Parser (Two-block layout)
+# ----------------------------
 def parse_exchange_rate_two_block(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Parse a sheet laid out like:
-      DATE | USD AED EUR QAR | ... | USD AED EUR QAR   (BOOKED block, then BANK block)
+    Handles Exchange Rate sheet with layout:
+        DATE | USD AED EUR QAR (BOOKED) | ... | USD AED EUR QAR (BANK)
 
-    Returns long format with both rates:
-      columns: date, currency, booked_rate, bank_rate, spread, pct_diff
+    Returns: date | currency | booked_rate | bank_rate | spread | pct_diff
     """
     try:
         d = df.copy()
-
-        # Clean headers and drop all-empty rows/cols
-        d.columns = [str(c).strip() for c in d.columns]
         d = d.dropna(how="all").dropna(axis=1, how="all")
 
-        # Find the Date column
-        date_col = next(c for c in d.columns if "date" in c.lower())
+        # Normalize headers
+        d.columns = [str(c).strip().upper() for c in d.columns]
+
+        # Identify date col (A)
+        date_col = next((c for c in d.columns if "DATE" in c), None)
+        if not date_col:
+            return pd.DataFrame()
         d[date_col] = pd.to_datetime(d[date_col], errors="coerce", dayfirst=True)
 
-        # Target currency labels to look for
-        cur_labels = ["USD", "AED", "EUR", "QAR"]
-
-        # Map each currency to its FIRST (booked) and SECOND (bank) occurrence
-        booked_cols, bank_cols = {}, {}
-        for cur in cur_labels:
-            hits = [c for c in d.columns if c.strip().upper() == cur]
-            if len(hits) >= 1:
-                booked_cols[cur] = hits[0]
-            if len(hits) >= 2:
-                bank_cols[cur] = hits[1]
-
-        # If we don’t have at least one currency present in both blocks, bail
-        both = [c for c in cur_labels if c in booked_cols and c in bank_cols]
-        if not both:
-            return pd.DataFrame()
+        # Explicit map: booked = cols B–E, bank = cols G–J
+        booked_map = {"USD": "USD", "AED": "AED", "EUR": "EUR", "QAR": "QAR"}
+        bank_map   = {"USD": "USD.1", "AED": "AED.1", "EUR": "EUR.1", "QAR": "QAR.1"}
 
         records = []
         for _, row in d.iterrows():
-            if pd.isna(row[date_col]):  # ignore blank date rows
+            dt = row[date_col]
+            if pd.isna(dt):
                 continue
-            for cur in both:
-                bkd = _to_number(row[booked_cols[cur]])
-                bnk = _to_number(row[bank_cols[cur]])
+            for cur in booked_map.keys():
+                bkd = _to_number(row.get(booked_map[cur]))
+                bnk = _to_number(row.get(bank_map[cur]))
                 if pd.isna(bkd) and pd.isna(bnk):
                     continue
-                spread = (bnk - bkd) if pd.notna(bkd) and pd.notna(bnk) else np.nan
-                pct_diff = (spread / bkd) if (pd.notna(spread) and bkd not in (None, 0) and not pd.isna(bkd)) else np.nan
+                spread = (bnk - bkd) if (pd.notna(bkd) and pd.notna(bnk)) else np.nan
+                pct_diff = (spread / bkd) if (pd.notna(spread) and pd.notna(bkd) and bkd != 0) else np.nan
                 records.append({
-                    "date": row[date_col],
+                    "date": dt,
                     "currency": cur,
                     "booked_rate": bkd,
                     "bank_rate": bnk,
@@ -644,13 +640,103 @@ def parse_exchange_rate_two_block(df: pd.DataFrame) -> pd.DataFrame:
                     "pct_diff": pct_diff
                 })
 
-        out = pd.DataFrame.from_records(records).dropna(subset=["date", "currency"])
+        out = pd.DataFrame(records).dropna(subset=["date", "currency"])
         return out.sort_values(["currency", "date"]).reset_index(drop=True)
 
     except Exception as e:
         logger.error(f"Exchange rate (two-block) parsing error: {e}")
         st.error(f"❌ Exchange rate parsing failed: {str(e)}")
         return pd.DataFrame()
+
+
+# ----------------------------
+# Main
+# ----------------------------
+def main():
+    render_header()
+    st.markdown("")
+
+    # ... [other sheet loading stays unchanged] ...
+
+    # Exchange Rate
+    try:
+        df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
+        df_fx = parse_exchange_rate_two_block(df_fx_raw)
+        data_status['exchange_rate'] = 'success' if not df_fx.empty else 'warning'
+    except Exception as e:
+        logger.error(f"Exchange rate processing failed: {e}")
+        df_fx = pd.DataFrame()
+        data_status['exchange_rate'] = 'error'
+
+    # ... [sidebar, KPIs etc. unchanged] ...
+
+    # ===== Exchange Rate Section =====
+    if st.session_state.get("show_fx", False):
+        st.markdown('<span class="section-chip">💱 Exchange Rate — Variation</span>', unsafe_allow_html=True)
+
+        if df_fx.empty:
+            st.info("No exchange rate data.")
+        else:
+            # Filters
+            all_curr = sorted(df_fx["currency"].unique().tolist())
+            default_pick = [c for c in ["USD", "AED", "EUR", "QAR"] if c in all_curr] or all_curr[:3]
+            pick_curr = st.multiselect("Currencies", all_curr, default=default_pick, key="fx_curr")
+
+            dmin, dmax = df_fx["date"].min().date(), df_fx["date"].max().date()
+            view_fx = df_fx[(df_fx["currency"].isin(pick_curr)) &
+                            (df_fx["date"].dt.date >= dmin) &
+                            (df_fx["date"].dt.date <= dmax)].copy()
+
+            if view_fx.empty:
+                st.info("No data for selected currencies.")
+            else:
+                # Chart: Booked vs Bank
+                import plotly.graph_objects as go, plotly.io as pio
+                if "brand" not in pio.templates:
+                    pio.templates["brand"] = pio.templates["plotly_white"]
+                    pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                    pio.templates["brand"].layout.font.family = APP_FONT
+                fig = go.Figure()
+                for cur in pick_curr:
+                    sub = view_fx[view_fx["currency"] == cur]
+                    if sub.empty: continue
+                    fig.add_trace(go.Scatter(x=sub["date"], y=sub["booked_rate"], mode="lines+markers", name=f"{cur} – Booked"))
+                    fig.add_trace(go.Scatter(x=sub["date"], y=sub["bank_rate"],   mode="lines+markers", name=f"{cur} – Bank"))
+                fig.update_layout(template="brand", height=420, title="Booked vs Bank Rates",
+                                  xaxis_title="Date", yaxis_title="Rate (SAR)")
+                fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Spike Detector
+            st.markdown("### 🔎 Spike Detector")
+            colA, colB = st.columns(2)
+            with colA:
+                pct_thr = st.number_input("Flag if |Bank–Booked| ≥ X% of Booked", min_value=0.0, max_value=100.0, value=0.5, step=0.1)
+            with colB:
+                abs_thr = st.number_input("Flag if day-over-day Bank jump ≥", min_value=0.0, value=0.03, step=0.01)
+
+            spikes = view_fx.copy()
+            spikes["day_jump"] = spikes.sort_values(["currency","date"]).groupby("currency")["bank_rate"].diff()
+            spikes["pct_gap"] = spikes["pct_diff"] * 100.0
+
+            flagged = spikes[(spikes["pct_gap"].abs() >= pct_thr) | (spikes["day_jump"].abs() >= abs_thr)]
+            if flagged.empty:
+                st.info("No spikes against current thresholds.")
+            else:
+                flagged["date"] = flagged["date"].dt.strftime(config.DATE_FMT)
+                show = flagged.rename(columns={
+                    "date":"Date","currency":"Currency","booked_rate":"Booked","bank_rate":"Bank",
+                    "spread":"Spread","pct_gap":"Gap (%)","day_jump":"Δ Bank (DoD)"
+                })
+                st.dataframe(style_right(show, num_cols=["Booked","Bank","Spread","Gap (%)","Δ Bank (DoD)"], decimals=4),
+                             use_container_width=True, height=360)
+
+    # ... [rest of dashboard unchanged: Bank Balances, Supplier Payments, LC, Liquidity, CVP, Footer] ...
+
+
+if __name__ == "__main__":
+    main()
+
 
 
 # ----------------------------
@@ -1283,4 +1369,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
