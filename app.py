@@ -11,7 +11,7 @@
 # - Quick Insights near top-left; hides Top Bank & Concentration Risk items
 # - Adds insights for negative banks (balance) and negative after-settlement
 # - Sidebar button to toggle Exchange Rate section (💱) in main area
-# - FX section: Hides From/To date pickers; uses full range automatically
+# - Hides FX date pickers and disables Plotly range slider
 
 import io
 import time
@@ -181,7 +181,7 @@ LINKS = {
     "SETTLEMENTS": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=978859477",
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
-    # Exchange Rate sheet (gid: 58540369)
+    # NEW: Exchange Rate sheet (gid from your link: 58540369)
     "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
 }
 
@@ -772,7 +772,7 @@ def main():
         df_cvp = pd.DataFrame()
         data_status['collection_branch'] = 'error'
 
-    # Exchange Rate data
+    # NEW: Exchange Rate data
     try:
         df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
         df_fx = parse_exchange_rate(df_fx_raw)
@@ -867,22 +867,23 @@ def main():
 
     st.markdown("---")
 
-    # ===== Exchange Rate — Variation (shown when sidebar button toggled) =====
+    # ===== NEW: Exchange Rate — Variation (shown when sidebar button toggled) =====
     if st.session_state.get("show_fx", False):
         st.markdown('<span class="section-chip">💱 Exchange Rate — Variation</span>', unsafe_allow_html=True)
         if df_fx.empty:
             st.info("No exchange rate data.")
         else:
-            # Controls (hide time frame, use full range silently)
+            # Controls
             all_curr = sorted(df_fx["currency"].unique().tolist())
             default_pick = [c for c in ["USD", "AED", "EUR", "QAR"] if c in all_curr] or all_curr[:3]
             col1, col2 = st.columns([2, 1])
             with col1:
                 pick_curr = st.multiselect("Currencies", all_curr, default=default_pick, key="fx_curr")
-            # --- Hidden time frame (no UI): use full available range ---
+
+            # Hide time-frame controls: use full range silently
             dmin = df_fx["date"].min().date()
             dmax = df_fx["date"].max().date()
-            start_d, end_d = dmin, dmax  # <- no date inputs shown
+            start_d, end_d = dmin, dmax
 
             view_fx = df_fx[
                 (df_fx["currency"].isin(pick_curr)) &
@@ -911,6 +912,8 @@ def main():
                                       margin=dict(l=20, r=20, t=40, b=20),
                                       title="Daily Exchange Rate Variation",
                                       xaxis_title="Date", yaxis_title="Rate (SAR)")
+                    # 🔕 Hide Plotly range slider & selector
+                    fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
                     logger.error(f"FX chart error: {e}")
@@ -1111,7 +1114,7 @@ def main():
                     display_as_progress_bars(normal.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}))
 
             elif lc_display == "Mini Cards":
-                cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}).sort_values("balance", ascending=False)
+                cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                 display_as_mini_cards(cards, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
 
             urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
@@ -1153,6 +1156,8 @@ def main():
                 fig.update_layout(template="brand", title="Total Liquidity Trend",
                                   xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
                                   margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+                # 🔕 Hide Plotly range slider & selector
+                fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
                 st.plotly_chart(fig, use_container_width=True)
             with c2:
                 st.markdown("### 📊 Liquidity Metrics")
@@ -1184,7 +1189,7 @@ def main():
                 import plotly.io as pio, plotly.graph_objects as go
                 if "brand" not in pio.templates:
                     pio.templates["brand"] = pio.templates["plotly_white"]
-                    pio.templates["brand"].layout.colorway = [THEME['accent1'], THEME['accent2'], "#64748b", "#94a3b8"]
+                    pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
                     pio.templates["brand"].layout.font.family = APP_FONT
                 fig = go.Figure()
                 fig.add_bar(name="Collection", x=cvp_sorted["branch"], y=cvp_sorted["collection"])
