@@ -588,50 +588,70 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 # --- Exchange Rate parser (supports Date-first and Currency-first layouts)
-def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
+def parse_exchange_rate_two_block(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Supports both layouts:
-    A) Date-first:  DATE | USD | AED | EUR | QAR ...
-    B) Currency-first: Currency | 18-Aug-2025 | 19-Aug-2025 | ...
+    Parse a sheet laid out like:
+      DATE | USD AED EUR QAR | ... | USD AED EUR QAR   (BOOKED block, then BANK block)
 
-    Returns long format: currency | date | rate
+    Returns long format with both rates:
+      columns: date, currency, booked_rate, bank_rate, spread, pct_diff
     """
     try:
         d = df.copy()
-        d.columns = [str(c).strip().strip('"').strip("'") for c in d.columns]
 
-        has_date_col = any("date" in c.lower() for c in d.columns)
-        if has_date_col:
-            date_col = next(c for c in d.columns if "date" in c.lower())
-            value_cols = [c for c in d.columns if c != date_col]
-            long_df = d.melt(id_vars=[date_col], value_vars=value_cols,
-                             var_name="currency", value_name="rate")
-            long_df = long_df.rename(columns={date_col: "date"})
-            long_df["date"] = pd.to_datetime(long_df["date"], errors="coerce", dayfirst=True)
-            long_df["currency"] = long_df["currency"].astype(str).str.strip()
-            long_df["rate"] = long_df["rate"].map(_to_number)
-        else:
-            cur_col = next((c for c in d.columns if "currency" in c.lower()), d.columns[0])
-            candidate_cols = [c for c in d.columns if c != cur_col]
-            parsed = pd.to_datetime(pd.Index(candidate_cols), errors="coerce", dayfirst=True)
-            date_cols = [col for col, dt_ in zip(candidate_cols, parsed) if pd.notna(dt_)]
-            if not date_cols:
-                return pd.DataFrame()
-            long_df = d.melt(id_vars=[cur_col], value_vars=date_cols,
-                             var_name="date", value_name="rate").rename(columns={cur_col: "currency"})
-            long_df["date"] = pd.to_datetime(long_df["date"], errors="coerce", dayfirst=True)
-            long_df["currency"] = long_df["currency"].astype(str).str.strip()
-            long_df["rate"] = long_df["rate"].map(_to_number)
+        # Clean headers and drop all-empty rows/cols
+        d.columns = [str(c).strip() for c in d.columns]
+        d = d.dropna(how="all").dropna(axis=1, how="all")
 
-        long_df = long_df.dropna(subset=["currency", "date", "rate"])
-        long_df = long_df[long_df["currency"] != ""]
-        long_df = long_df.sort_values(["currency", "date"]).reset_index(drop=True)
-        return long_df
+        # Find the Date column
+        date_col = next(c for c in d.columns if "date" in c.lower())
+        d[date_col] = pd.to_datetime(d[date_col], errors="coerce", dayfirst=True)
+
+        # Target currency labels to look for
+        cur_labels = ["USD", "AED", "EUR", "QAR"]
+
+        # Map each currency to its FIRST (booked) and SECOND (bank) occurrence
+        booked_cols, bank_cols = {}, {}
+        for cur in cur_labels:
+            hits = [c for c in d.columns if c.strip().upper() == cur]
+            if len(hits) >= 1:
+                booked_cols[cur] = hits[0]
+            if len(hits) >= 2:
+                bank_cols[cur] = hits[1]
+
+        # If we don’t have at least one currency present in both blocks, bail
+        both = [c for c in cur_labels if c in booked_cols and c in bank_cols]
+        if not both:
+            return pd.DataFrame()
+
+        records = []
+        for _, row in d.iterrows():
+            if pd.isna(row[date_col]):  # ignore blank date rows
+                continue
+            for cur in both:
+                bkd = _to_number(row[booked_cols[cur]])
+                bnk = _to_number(row[bank_cols[cur]])
+                if pd.isna(bkd) and pd.isna(bnk):
+                    continue
+                spread = (bnk - bkd) if pd.notna(bkd) and pd.notna(bnk) else np.nan
+                pct_diff = (spread / bkd) if (pd.notna(spread) and bkd not in (None, 0) and not pd.isna(bkd)) else np.nan
+                records.append({
+                    "date": row[date_col],
+                    "currency": cur,
+                    "booked_rate": bkd,
+                    "bank_rate": bnk,
+                    "spread": spread,
+                    "pct_diff": pct_diff
+                })
+
+        out = pd.DataFrame.from_records(records).dropna(subset=["date", "currency"])
+        return out.sort_values(["currency", "date"]).reset_index(drop=True)
 
     except Exception as e:
-        logger.error(f"Exchange rate parsing error: {e}")
+        logger.error(f"Exchange rate (two-block) parsing error: {e}")
         st.error(f"❌ Exchange rate parsing failed: {str(e)}")
         return pd.DataFrame()
+
 
 # ----------------------------
 # Header
@@ -1263,3 +1283,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
