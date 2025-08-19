@@ -10,7 +10,8 @@
 # - Key Metrics above Controls in sidebar
 # - Quick Insights near top-left; hides Top Bank & Concentration Risk items
 # - Adds insights for negative banks (balance) and negative after-settlement
-# - NEW: Sidebar button to toggle Exchange Rate section (💱) in main area
+# - Sidebar button to toggle Exchange Rate section (💱) in main area
+# - FX section: Hides From/To date pickers; uses full range automatically
 
 import io
 import time
@@ -180,7 +181,7 @@ LINKS = {
     "SETTLEMENTS": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=978859477",
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
-    # NEW: Exchange Rate sheet (gid from your link: 58540369)
+    # Exchange Rate sheet (gid: 58540369)
     "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
 }
 
@@ -586,41 +587,31 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
         st.error(f"❌ Branch CVP parsing failed: {str(e)}")
         return pd.DataFrame()
 
-# --- REPLACE the existing parse_exchange_rate with this version ---
+# --- Exchange Rate parser (supports Date-first and Currency-first layouts)
 def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
     """
     Supports both layouts:
-    A) Date-first (your sheet):  DATE | USD | AED | EUR | QAR ...
-    B) Currency-first:           Currency | 18-Aug-2025 | 19-Aug-2025 | ...
+    A) Date-first:  DATE | USD | AED | EUR | QAR ...
+    B) Currency-first: Currency | 18-Aug-2025 | 19-Aug-2025 | ...
 
     Returns long format: currency | date | rate
     """
     try:
         d = df.copy()
-
-        # Clean headers
         d.columns = [str(c).strip().strip('"').strip("'") for c in d.columns]
 
-        # Detect orientation
         has_date_col = any("date" in c.lower() for c in d.columns)
         if has_date_col:
-            # Layout A: DATE column + currency columns
             date_col = next(c for c in d.columns if "date" in c.lower())
-            # keep only non-empty numeric-ish columns besides date
             value_cols = [c for c in d.columns if c != date_col]
-            # Melt to long
             long_df = d.melt(id_vars=[date_col], value_vars=value_cols,
                              var_name="currency", value_name="rate")
             long_df = long_df.rename(columns={date_col: "date"})
-            # Parse
             long_df["date"] = pd.to_datetime(long_df["date"], errors="coerce", dayfirst=True)
             long_df["currency"] = long_df["currency"].astype(str).str.strip()
             long_df["rate"] = long_df["rate"].map(_to_number)
-
         else:
-            # Layout B: Currency first column + date columns
             cur_col = next((c for c in d.columns if "currency" in c.lower()), d.columns[0])
-            # Identify date-like columns by parsing the header text
             candidate_cols = [c for c in d.columns if c != cur_col]
             parsed = pd.to_datetime(pd.Index(candidate_cols), errors="coerce", dayfirst=True)
             date_cols = [col for col, dt_ in zip(candidate_cols, parsed) if pd.notna(dt_)]
@@ -632,7 +623,6 @@ def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
             long_df["currency"] = long_df["currency"].astype(str).str.strip()
             long_df["rate"] = long_df["rate"].map(_to_number)
 
-        # Clean + sort
         long_df = long_df.dropna(subset=["currency", "date", "rate"])
         long_df = long_df[long_df["currency"] != ""]
         long_df = long_df.sort_values(["currency", "date"]).reset_index(drop=True)
@@ -782,7 +772,7 @@ def main():
         df_cvp = pd.DataFrame()
         data_status['collection_branch'] = 'error'
 
-    # NEW: Exchange Rate data
+    # Exchange Rate data
     try:
         df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
         df_fx = parse_exchange_rate(df_fx_raw)
@@ -877,23 +867,22 @@ def main():
 
     st.markdown("---")
 
-    # ===== NEW: Exchange Rate — Variation (shown when sidebar button toggled) =====
+    # ===== Exchange Rate — Variation (shown when sidebar button toggled) =====
     if st.session_state.get("show_fx", False):
         st.markdown('<span class="section-chip">💱 Exchange Rate — Variation</span>', unsafe_allow_html=True)
         if df_fx.empty:
             st.info("No exchange rate data.")
         else:
-            # Controls
+            # Controls (hide time frame, use full range silently)
             all_curr = sorted(df_fx["currency"].unique().tolist())
             default_pick = [c for c in ["USD", "AED", "EUR", "QAR"] if c in all_curr] or all_curr[:3]
             col1, col2 = st.columns([2, 1])
             with col1:
                 pick_curr = st.multiselect("Currencies", all_curr, default=default_pick, key="fx_curr")
-            with col2:
-                dmin = df_fx["date"].min().date()
-                dmax = df_fx["date"].max().date()
-                start_d = st.date_input("From", value=dmin, min_value=dmin, max_value=dmax, key="fx_from")
-                end_d = st.date_input("To", value=dmax, min_value=dmin, max_value=dmax, key="fx_to")
+            # --- Hidden time frame (no UI): use full available range ---
+            dmin = df_fx["date"].min().date()
+            dmax = df_fx["date"].max().date()
+            start_d, end_d = dmin, dmax  # <- no date inputs shown
 
             view_fx = df_fx[
                 (df_fx["currency"].isin(pick_curr)) &
@@ -1122,7 +1111,7 @@ def main():
                     display_as_progress_bars(normal.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}))
 
             elif lc_display == "Mini Cards":
-                cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
+                cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}).sort_values("balance", ascending=False)
                 display_as_mini_cards(cards, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
 
             urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
@@ -1140,7 +1129,6 @@ def main():
         st.info("No liquidity data available.")
     else:
         try:
-            # Plotly brand template
             import plotly.io as pio, plotly.graph_objects as go
             if "brand" not in pio.templates:
                 pio.templates["brand"] = pio.templates["plotly_white"]
@@ -1196,7 +1184,7 @@ def main():
                 import plotly.io as pio, plotly.graph_objects as go
                 if "brand" not in pio.templates:
                     pio.templates["brand"] = pio.templates["plotly_white"]
-                    pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                    pio.templates["brand"].layout.colorway = [THEME['accent1'], THEME['accent2'], "#64748b", "#94a3b8"]
                     pio.templates["brand"].layout.font.family = APP_FONT
                 fig = go.Figure()
                 fig.add_bar(name="Collection", x=cvp_sorted["branch"], y=cvp_sorted["collection"])
