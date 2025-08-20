@@ -878,7 +878,7 @@ def main():
                 lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
                 weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
                 k1, k2, k3 = st.columns(3)
-                with k1: st.metric("Total LC (Month)", fmt_number_only(lc_m["amount"].sum()))
+                with k1: st.metric("Current Due", fmt_number_only(lc_m["amount"].sum()))
                 with k2: st.metric("# of LCs", len(lc_m))
                 with k3:
                     # >>> Show Balance Due from sheet <<<
@@ -1260,4 +1260,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
