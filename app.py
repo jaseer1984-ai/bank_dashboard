@@ -176,7 +176,7 @@ def create_session() -> requests.Session:
 http_session = create_session()
 
 # ----------------------------
-# Links - Exchange Rate link restored
+# Links - Exchange Rate link with correct gid
 # ----------------------------
 LINKS = {
     "BANK BALANCE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=860709395",
@@ -184,7 +184,7 @@ LINKS = {
     "SETTLEMENTS": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=978859477",
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
-    "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=123456789",  # Add your actual gid
+    "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
 }
 
 # ----------------------------
@@ -557,66 +557,74 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
 def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
     """Parse exchange rates data from the spreadsheet"""
     try:
+        if df.empty:
+            return pd.DataFrame()
+            
         d = cols_lower(df)
         
-        # Look for currency pairs and rates
-        currency_col = None
-        rate_col = None
-        date_col = None
-        
-        # Find currency column
-        for col in d.columns:
-            if any(term in col for term in ["currency", "pair", "from", "base"]):
-                currency_col = col
-                break
-        
-        # Find rate column  
-        for col in d.columns:
-            if any(term in col for term in ["rate", "exchange", "value", "price"]):
-                rate_col = col
-                break
-                
         # Find date column
+        date_col = None
         for col in d.columns:
             if any(term in col for term in ["date", "time", "updated"]):
                 date_col = col
                 break
         
-        if not currency_col or not rate_col:
-            # Try to parse as simple currency/rate format
-            if len(d.columns) >= 2:
-                currency_col = d.columns[0]
-                rate_col = d.columns[1]
-                if len(d.columns) >= 3:
-                    date_col = d.columns[2]
-        
-        if not currency_col or not rate_col:
+        if not date_col:
             return pd.DataFrame()
             
-        out = pd.DataFrame({
-            "currency_pair": d[currency_col].astype(str).str.strip(),
-            "rate": d[rate_col].map(_to_number),
-        })
+        # Look for currency columns (USD, EUR, AED, QAR, etc.)
+        currency_cols = []
+        for col in d.columns:
+            if col != date_col and col.upper() in ['USD', 'EUR', 'AED', 'QAR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD']:
+                currency_cols.append(col)
         
-        if date_col:
-            out["date"] = pd.to_datetime(d[date_col], errors="coerce")
-        else:
-            out["date"] = pd.Timestamp.now()
+        if not currency_cols:
+            # Fallback: try to detect numeric columns that might be currencies
+            for col in d.columns:
+                if col != date_col and len(col) <= 4 and col.upper() == col:
+                    # Check if column has numeric data
+                    sample_vals = d[col].dropna().head(5)
+                    if not sample_vals.empty:
+                        numeric_count = sum(1 for val in sample_vals if pd.notna(_to_number(val)))
+                        if numeric_count >= len(sample_vals) * 0.8:  # 80% numeric
+                            currency_cols.append(col)
+        
+        if not currency_cols:
+            return pd.DataFrame()
+        
+        # Convert to long format
+        result_rows = []
+        
+        for _, row in d.iterrows():
+            date_val = pd.to_datetime(row[date_col], errors="coerce")
+            if pd.isna(date_val):
+                continue
+                
+            for curr_col in currency_cols:
+                rate_val = _to_number(row[curr_col])
+                if pd.notna(rate_val) and rate_val > 0:
+                    currency_pair = f"{curr_col.upper()}/SAR"  # Assuming SAR as base
+                    result_rows.append({
+                        "currency_pair": currency_pair,
+                        "rate": rate_val,
+                        "date": date_val
+                    })
+        
+        if not result_rows:
+            return pd.DataFrame()
             
-        # Clean currency pairs
-        out["currency_pair"] = out["currency_pair"].str.upper()
-        out = out.dropna(subset=["currency_pair", "rate"])
-        out = out[out["currency_pair"].ne("")]
+        out = pd.DataFrame(result_rows)
         
         # Add change calculation if we have historical data
-        if len(out) > 1 and date_col:
-            out = out.sort_values("date")
+        if len(out) > 1:
+            out = out.sort_values(["currency_pair", "date"])
             out["prev_rate"] = out.groupby("currency_pair")["rate"].shift(1)
             out["change"] = out["rate"] - out["prev_rate"] 
             out["change_pct"] = (out["change"] / out["prev_rate"]) * 100
         
         return out.reset_index(drop=True)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error parsing exchange rates: {e}")
         return pd.DataFrame()
 
 def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
