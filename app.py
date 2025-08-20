@@ -12,6 +12,7 @@
 # - Adds insights for negative banks (balance) and negative after-settlement
 # - Sidebar button to toggle Exchange Rate section (💱) in main area
 # - Hides FX date pickers and disables Plotly range slider
+# - ✅ FX chart shows DATE ONLY on x-axis (no time labels)
 
 import io
 import time
@@ -85,9 +86,7 @@ def set_app_font(family: str = APP_FONT):
       button, input, textarea, select {{ font-family: var(--app-font) !important; }}
       div[data-testid="stMetricValue"], div[data-testid="stMetricLabel"] {{ font-family: var(--app-font) !important; }}
       div[data-testid="stDataFrame"] * {{ font-family: var(--app-font) !important; }}
-      /* Make numbers align nicely */
       .stDataFrame, .stDataFrame * {{ font-variant-numeric: tabular-nums; }}
-      /* Hide viewer/help badges */
       [data-testid="stDecoration"], [data-testid="stStatusWidget"], [data-testid="stToolbar"] {{ display: none !important; }}
     </style>
     """.format(font_q=family.replace(" ", "+"), font=family)
@@ -96,7 +95,7 @@ def set_app_font(family: str = APP_FONT):
 set_app_font()
 
 # ----------------------------
-# Theme Palettes (one-line swap)
+# Theme Palettes
 # ----------------------------
 PALETTES = {
     "Indigo":  {"accent1":"#3b5bfd","accent2":"#2f2fb5","pos":"#0f172a","neg":"#b91c1c",
@@ -113,12 +112,10 @@ PALETTES = {
                 "card_low":"#0b1220","card_neg":"#3f1d1d","heading_bg":"#111827"},
 }
 
-# Default active palette (can be changed from sidebar)
 if "palette_name" not in st.session_state:
     st.session_state["palette_name"] = "Indigo"
 ACTIVE = PALETTES[st.session_state["palette_name"]]
 
-# Theme tokens used across components
 THEME = {
     "accent1": ACTIVE["accent1"],
     "accent2": ACTIVE["accent2"],
@@ -129,14 +126,13 @@ THEME = {
         "ok": ACTIVE["card_ok"], "low": ACTIVE["card_low"], "neg": ACTIVE["card_neg"],
     },
     "badge": {
-        "pos_bg": "rgba(5,150,105,.10)",   # greenish
-        "neg_bg": "rgba(185,28,28,.10)",   # reddish
+        "pos_bg": "rgba(5,150,105,.10)",
+        "neg_bg": "rgba(185,28,28,.10)",
     },
     "icons": {"best": "💎", "good": "🔹", "ok": "💠", "low": "💚", "neg": "⚠️"},
-    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},  # else low; negative -> neg
+    "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},
 }
 
-# Subtle hover for cards + section chips
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -145,13 +141,8 @@ st.markdown(f"""
     border-radius: 6px;
     box-shadow: 0 6px 18px rgba(0,0,0,.12);
   }}
-  .dash-card {{
-    transition: transform .15s ease, box-shadow .15s ease;
-  }}
-  .dash-card:hover {{
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(0,0,0,.08);
-  }}
+  .dash-card {{ transition: transform .15s ease, box-shadow .15s ease; }}
+  .dash-card:hover {{ transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.08); }}
   .section-chip {{
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
@@ -181,7 +172,6 @@ LINKS = {
     "SETTLEMENTS": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=978859477",
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
-    # NEW: Exchange Rate sheet (gid from your link: 58540369)
     "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
 }
 
@@ -206,10 +196,9 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
     return decorator
 
 # ----------------------------
-# Helpers: parsing + formatting
+# Helpers
 # ----------------------------
 def _to_number(x) -> float:
-    """Convert text with commas/percent/() negatives to float; NaN on failure."""
     if pd.isna(x) or x == '':
         return np.nan
     s = str(x).strip().replace(",", "")
@@ -221,14 +210,12 @@ def _to_number(x) -> float:
         s = s[:-1]
     try:
         num = float(s)
-        if neg:
-            num = -num
+        if neg: num = -num
         if abs(num) > 1e12:
             logger.warning(f"Unusually large number detected: {num}")
             return np.nan
         return num
-    except (ValueError, OverflowError) as e:
-        logger.debug(f"Number conversion failed for '{x}': {e}")
+    except (ValueError, OverflowError):
         return np.nan
 
 def cols_lower(df: pd.DataFrame) -> pd.DataFrame:
@@ -251,7 +238,6 @@ def fmt_number_only(v) -> str:
         return str(v)
 
 def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
-    """Right-align numeric columns, keep numbers sortable, format with separators."""
     if num_cols is None:
         num_cols = df.select_dtypes(include="number").columns
     fmt = f"{{:,.{decimals}f}}".format
@@ -288,23 +274,18 @@ def read_csv(url: str) -> pd.DataFrame:
         logger.info(f"Successfully loaded {len(df)} rows")
         return df
     except requests.Timeout:
-        logger.error(f"Timeout while fetching {url}")
         st.error("⏱️ Data source timed out. Please try refreshing.")
         return pd.DataFrame()
     except requests.ConnectionError:
-        logger.error(f"Connection error for {url}")
         st.error("🔌 Unable to connect to data source. Check your internet connection.")
         return pd.DataFrame()
     except requests.HTTPError as e:
-        logger.error(f"HTTP error {e.response.status_code} for {url}")
         st.error(f"🌐 Server error: {e.response.status_code}")
         return pd.DataFrame()
     except pd.errors.EmptyDataError:
-        logger.error(f"Empty CSV data from {url}")
         st.error("📋 Data source returned empty file")
         return pd.DataFrame()
     except Exception as e:
-        logger.error(f"Unexpected error loading {url}: {e}")
         st.error(f"❌ Unexpected error: {str(e)}")
         return pd.DataFrame()
 
@@ -367,7 +348,7 @@ def display_as_metrics(df, bank_col="bank", amount_col="balance"):
                 if amount >= 1_000_000:
                     display_amount = f"{amount/1_000_000:.1f}M"
                 elif amount >= 1_000:
-                    display_amount = f"{amount/1_000:.0f}K"
+                    display_amount = f"{amount/1_000:.0f}"
                 else:
                     display_amount = f"{amount:.0f}"
                 st.markdown(
@@ -440,7 +421,6 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
                     by_bank = out.groupby("bank", as_index=False).agg(agg)
                     return by_bank, datetime.now()
 
-        # Fallback: legacy layout with date columns
         raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
         bank_col = None
         for col in raw.columns:
@@ -479,15 +459,10 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
             return by_bank, latest_date
     except Exception as e:
-        logger.error(f"Bank balance parsing error: {e}")
         st.error(f"❌ Bank balance parsing failed: {str(e)}")
     return pd.DataFrame(), None
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return ALL supplier payments with normalized columns.
-    Filtering (Approved / Released) is done in the UI.
-    """
     try:
         d = cols_lower(df).rename(
             columns={"supplier name": "supplier",
@@ -499,7 +474,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 
         amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
         if not amt_col:
-            logger.error("No amount column found in supplier payments"); return pd.DataFrame()
+            return pd.DataFrame()
 
         out = pd.DataFrame({
             "bank": d["bank"].astype(str).str.strip(),
@@ -513,7 +488,6 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         out = out[out["bank"].ne("")]
         return out
     except Exception as e:
-        logger.error(f"Supplier payments parsing error: {e}")
         st.error(f"❌ Supplier payments parsing failed: {str(e)}")
         return pd.DataFrame()
 
@@ -538,16 +512,15 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
             "bank": d[bank_col].astype(str).str.strip(),
             "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
             "amount": d[amount_col].map(_to_number),
-            "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
-            "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
-            "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
+            "status": d[status_col].astype(str).title().strip() if status_col else "",
+            "type": d[type_col].astype(str).upper().strip() if type_col else "",
+            "remark": d[remark_col].astype(str).strip() if remark_col else "",
             "description": ""
         })
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
         out = out[out["status"].str.lower() == "pending"].copy()
         return out
     except Exception as e:
-        logger.error(f"Settlements parsing error: {e}")
         st.error(f"❌ Settlements parsing failed: {str(e)}")
         return pd.DataFrame()
 
@@ -564,7 +537,6 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
         }).dropna()
         return out.sort_values("date")
     except Exception as e:
-        logger.error(f"Fund movement parsing error: {e}")
         st.error(f"❌ Fund movement parsing failed: {str(e)}")
         return pd.DataFrame()
 
@@ -583,11 +555,9 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
         out["net"] = out["collection"] - out["payments"]
         return out
     except Exception as e:
-        logger.error(f"Branch CVP parsing error: {e}")
         st.error(f"❌ Branch CVP parsing failed: {str(e)}")
         return pd.DataFrame()
 
-# --- Exchange Rate parser (supports Date-first and Currency-first layouts)
 def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
     """
     Supports both layouts:
@@ -629,7 +599,6 @@ def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
         return long_df
 
     except Exception as e:
-        logger.error(f"Exchange rate parsing error: {e}")
         st.error(f"❌ Exchange rate parsing failed: {str(e)}")
         return pd.DataFrame()
 
@@ -650,25 +619,23 @@ def render_header():
         st.caption(f"Enhanced Treasury Dashboard — Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ----------------------------
-# Sidebar (Refresh, then Key Metrics, then Controls, + FX toggle)
+# Sidebar
 # ----------------------------
 def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt):
     with st.sidebar:
-        # --- REFRESH (above metrics) ---
         st.markdown("### 🔄 Refresh")
         if st.button("Refresh Now", type="primary", use_container_width=True):
             st.cache_data.clear()
-            logger.info("Manual refresh triggered (sidebar)")
             st.rerun()
 
-        # --- FX TOGGLE BUTTON ---
+        # FX toggle
         if "show_fx" not in st.session_state:
             st.session_state["show_fx"] = False
         if st.button("📈 Exchange Rates", use_container_width=True, help="Show/Hide exchange rate chart"):
             st.session_state["show_fx"] = not st.session_state["show_fx"]
             st.rerun()
 
-        # --- KEY METRICS ---
+        # Key metrics
         st.markdown("### 📊 Key Metrics")
 
         def _kpi(title, value, bg, border, color):
@@ -687,8 +654,6 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
         _kpi("ACTIVE BANKS", banks_cnt, THEME["heading_bg"], THEME["accent2"], "#9F1239")
 
         st.markdown("---")
-
-        # --- CONTROLS ---
         st.markdown("### ⚙️ Controls")
         do_auto = st.toggle("Auto refresh",
                             value=st.session_state.get("auto_refresh", False),
@@ -722,21 +687,18 @@ def main():
         df_bal_raw = read_csv(LINKS["BANK BALANCE"])
         df_by_bank, bal_date = parse_bank_balance(df_bal_raw)
         data_status['bank_balance'] = 'success' if not df_by_bank.empty else 'warning'
-    except Exception as e:
-        logger.error(f"Bank balance processing failed: {e}")
+    except Exception:
         df_by_bank, bal_date = pd.DataFrame(), None
         data_status['bank_balance'] = 'error'
 
     try:
         df_pay_raw = read_csv(LINKS["SUPPLIER PAYMENTS"])
-        df_pay = parse_supplier_payments(df_pay_raw)  # returns ALL statuses
+        df_pay = parse_supplier_payments(df_pay_raw)
         data_status['supplier_payments'] = 'success' if not df_pay.empty else 'warning'
-    except Exception as e:
-        logger.error(f"Supplier payments processing failed: {e}")
+    except Exception:
         df_pay = pd.DataFrame()
         data_status['supplier_payments'] = 'error'
 
-    # Build Approved/Released subsets for UI + KPI
     if not df_pay.empty:
         status_lower = df_pay["status"].astype(str).str.lower()
         df_pay_approved = df_pay[status_lower.str.contains("approved", na=False)].copy()
@@ -749,8 +711,7 @@ def main():
         df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
         df_lc = parse_settlements(df_lc_raw)
         data_status['settlements'] = 'success' if not df_lc.empty else 'warning'
-    except Exception as e:
-        logger.error(f"Settlements processing failed: {e}")
+    except Exception:
         df_lc = pd.DataFrame()
         data_status['settlements'] = 'error'
 
@@ -758,8 +719,7 @@ def main():
         df_fm_raw = read_csv(LINKS["Fund Movement"])
         df_fm = parse_fund_movement(df_fm_raw)
         data_status['fund_movement'] = 'success' if not df_fm.empty else 'warning'
-    except Exception as e:
-        logger.error(f"Fund movement processing failed: {e}")
+    except Exception:
         df_fm = pd.DataFrame()
         data_status['fund_movement'] = 'error'
 
@@ -767,26 +727,21 @@ def main():
         df_cvp_raw = read_csv(LINKS["COLLECTION_BRANCH"])
         df_cvp = parse_branch_cvp(df_cvp_raw)
         data_status['collection_branch'] = 'success' if not df_cvp.empty else 'warning'
-    except Exception as e:
-        logger.error(f"CVP processing failed: {e}")
+    except Exception:
         df_cvp = pd.DataFrame()
         data_status['collection_branch'] = 'error'
 
-    # NEW: Exchange Rate data
     try:
         df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
         df_fx = parse_exchange_rate(df_fx_raw)
         data_status['exchange_rate'] = 'success' if not df_fx.empty else 'warning'
-    except Exception as e:
-        logger.error(f"Exchange rate processing failed: {e}")
+    except Exception:
         df_fx = pd.DataFrame()
         data_status['exchange_rate'] = 'error'
 
-    # KPIs
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
     banks_cnt = int(df_by_bank["bank"].nunique()) if not df_by_bank.empty else 0
 
-    # Timezone-safe "today" (naive)
     try:
         today0 = pd.Timestamp.now(tz=config.TZ).floor('D').tz_localize(None)
     except Exception:
@@ -794,24 +749,19 @@ def main():
 
     next4 = today0 + pd.Timedelta(days=3)
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
-    approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0  # KPI uses Approved only
+    approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0
 
-    # Sidebar (refresh, metrics, then controls, + FX toggle)
     render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt)
 
-    # Density tokens
     pad = "12px" if st.session_state.get("compact_density", False) else "20px"
     radius = "10px" if st.session_state.get("compact_density", False) else "12px"
     shadow = "0 1px 6px rgba(0,0,0,.06)" if st.session_state.get("compact_density", False) else "0 2px 8px rgba(0,0,0,.10)"
 
-    # ===== Quick Insights (near top-left) =====
+    # ===== Quick Insights =====
     st.markdown('<span class="section-chip">💡 Quick Insights & Recommendations</span>', unsafe_allow_html=True)
     insights = []
 
-    # (Intentionally hide "Top Bank Balance" and "Concentration Risk" insights)
-
     if not df_by_bank.empty:
-        # Negative available balances
         neg_rows = df_by_bank[df_by_bank["balance"] < 0].copy()
         if not neg_rows.empty:
             cnt = len(neg_rows)
@@ -823,7 +773,6 @@ def main():
                 "content": f"{cnt} bank(s) show negative available balance (total {fmt_number_only(total_neg)}). Affected: {names}."
             })
 
-        # Negative After-Settlement balances (if present)
         if "after_settlement" in df_by_bank.columns:
             neg_after = df_by_bank[df_by_bank["after_settlement"] < 0].copy()
             if not neg_after.empty:
@@ -867,20 +816,19 @@ def main():
 
     st.markdown("---")
 
-    # ===== NEW: Exchange Rate — Variation (shown when sidebar button toggled) =====
+    # ===== Exchange Rate — Variation (DATE only on x-axis) =====
     if st.session_state.get("show_fx", False):
         st.markdown('<span class="section-chip">💱 Exchange Rate — Variation</span>', unsafe_allow_html=True)
         if df_fx.empty:
             st.info("No exchange rate data.")
         else:
-            # Controls
             all_curr = sorted(df_fx["currency"].unique().tolist())
             default_pick = [c for c in ["USD", "AED", "EUR", "QAR"] if c in all_curr] or all_curr[:3]
             col1, col2 = st.columns([2, 1])
             with col1:
                 pick_curr = st.multiselect("Currencies", all_curr, default=default_pick, key="fx_curr")
 
-            # Hide time-frame controls: use full range silently
+            # Use full available date span silently
             dmin = df_fx["date"].min().date()
             dmax = df_fx["date"].max().date()
             start_d, end_d = dmin, dmax
@@ -896,6 +844,7 @@ def main():
             else:
                 try:
                     import plotly.io as pio, plotly.graph_objects as go
+
                     if "brand" not in pio.templates:
                         pio.templates["brand"] = pio.templates["plotly_white"]
                         pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
@@ -903,21 +852,56 @@ def main():
                         pio.templates["brand"].layout.paper_bgcolor = "white"
                         pio.templates["brand"].layout.plot_bgcolor = "white"
 
+                    # Let user choose chart model
+                    chart_type = st.selectbox("Chart type", ["Line", "Area", "Step", "Bar"], index=0, key="fx_chart_type")
+
+                    # Normalize to calendar date to avoid time-of-day effects
+                    view_fx["date_only"] = view_fx["date"].dt.normalize()
+
                     fig = go.Figure()
                     for cur in pick_curr:
                         sub = view_fx[view_fx["currency"] == cur]
-                        if not sub.empty:
-                            fig.add_trace(go.Scatter(x=sub["date"], y=sub["rate"], mode="lines+markers", name=cur))
-                    fig.update_layout(template="brand", height=420,
-                                      margin=dict(l=20, r=20, t=40, b=20),
-                                      title="Daily Exchange Rate Variation",
-                                      xaxis_title="Date", yaxis_title="Rate (SAR)")
-                    # 🔕 Hide Plotly range slider & selector
-                    fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
+                        if sub.empty:
+                            continue
+
+                        if chart_type == "Bar":
+                            fig.add_trace(go.Bar(x=sub["date_only"], y=sub["rate"], name=cur))
+                        else:
+                            line_shape = "linear" if chart_type in ("Line", "Area") else "hv"
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=sub["date_only"], y=sub["rate"], name=cur,
+                                    mode="lines+markers",
+                                    line=dict(shape=line_shape, width=2),
+                                    fill="tozeroy" if chart_type == "Area" else None,
+                                )
+                            )
+
+                    fig.update_layout(
+                        template="brand",
+                        height=420,
+                        margin=dict(l=20, r=20, t=40, b=20),
+                        title="Daily Exchange Rate Variation",
+                        xaxis_title=None,  # no 'Time' label
+                        yaxis_title="Rate (SAR)",
+                        showlegend=True,
+                    )
+
+                    # ✅ Show DATE only on ticks (no time)
+                    fig.update_xaxes(
+                        tickformat="%b %d, %Y",   # e.g., Aug 20, 2025
+                        showticklabels=True,
+                        rangeslider_visible=False,
+                        rangeselector=None,
+                    )
+
+                    # Optional: date-only hover text (no time)
+                    fig.update_traces(hovertemplate="%{x|%b %d, %Y}<br>Rate: %{y}<extra>%{fullData.name}</extra>")
+
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
                     logger.error(f"FX chart error: {e}")
-                    st.line_chart(view_fx.pivot_table(index="date", columns="currency", values="rate"))
+                    st.line_chart(view_fx.pivot_table(index="date_only", columns="currency", values="rate"))
 
         st.markdown("---")
 
@@ -937,7 +921,6 @@ def main():
                     bal = row.get('balance', np.nan)
                     after = row.get('after_settlement', np.nan)
 
-                    # choose bucket
                     if pd.notna(bal) and bal < 0:
                         bucket = "neg"
                     elif bal > THEME["thresholds"]["best"]:
@@ -953,7 +936,6 @@ def main():
                     icon = THEME["icons"][bucket]
                     amt_color = THEME["amount_color"]["neg"] if pd.notna(bal) and bal < 0 else THEME["amount_color"]["pos"]
 
-                    # After Settlement badge
                     after_html = ""
                     if pd.notna(after):
                         as_pos = after >= 0
@@ -1156,7 +1138,6 @@ def main():
                 fig.update_layout(template="brand", title="Total Liquidity Trend",
                                   xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
                                   margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
-                # 🔕 Hide Plotly range slider & selector
                 fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
                 st.plotly_chart(fig, use_container_width=True)
             with c2:
@@ -1170,7 +1151,6 @@ def main():
                 st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
                 st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
         except Exception as e:
-            logger.error(f"Liquidity trend analysis error: {e}")
             st.error("❌ Unable to display liquidity trend analysis")
             st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
@@ -1254,7 +1234,7 @@ def main():
         unsafe_allow_html=True
     )
 
-    # === Auto-refresh (end of app) ===
+    # === Auto-refresh ===
     if st.session_state.get("auto_refresh"):
         interval = int(st.session_state.get("auto_interval", 120))
         with st.status(f"Auto refreshing in {interval}s…", expanded=False):
