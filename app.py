@@ -11,6 +11,8 @@
 # - Sidebar button to toggle Exchange Rate section (💱) [kept for convenience]
 # - FX chart shows DATE ONLY (no time)
 # - ✅ Tabs: Overview (monthly insights), Bank, Settlements, Supplier Payments, Exchange Rate, Facility Report
+# - 🎨 Colored active tab backgrounds (each tab different)
+# - 🧮 "Remaining in Month" now uses Settlements sheet **Balance Due** when available
 
 import io
 import time
@@ -139,6 +141,20 @@ st.markdown(f"""
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
   }}
+
+  /* === Colored active tab backgrounds (6 main tabs) === */
+  div[data-testid="stTabs"] button[role="tab"] {{
+      border-radius: 8px !important;
+      padding: 6px 12px !important;
+      margin-right: 6px !important;
+      font-weight: 600;
+  }}
+  div[data-testid="stTabs"] div[role="tablist"] > div:nth-child(1) button[aria-selected="true"] {{ background:#ffe4e6 !important; color:#111827 !important; }}
+  div[data-testid="stTabs"] div[role="tablist"] > div:nth-child(2) button[aria-selected="true"] {{ background:#dbeafe !important; color:#111827 !important; }}
+  div[data-testid="stTabs"] div[role="tablist"] > div:nth-child(3) button[aria-selected="true"] {{ background:#fef9c3 !important; color:#111827 !important; }}
+  div[data-testid="stTabs"] div[role="tablist"] > div:nth-child(4) button[aria-selected="true"] {{ background:#dcfce7 !important; color:#111827 !important; }}
+  div[data-testid="stTabs"] div[role="tablist"] > div:nth-child(5) button[aria-selected="true"] {{ background:#ede9fe !important; color:#111827 !important; }}
+  div[data-testid="stTabs"] div[role="tablist"] > div:nth-child(6) button[aria-selected="true"] {{ background:#f1f5f9 !important; color:#111827 !important; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -435,10 +451,13 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
         if not amt_col: return pd.DataFrame()
 
+        supplier_series = d["supplier"].astype(str).str.strip() if "supplier" in d.columns else pd.Series([""]*len(d), index=d.index)
+        currency_series = d["currency"].astype(str).str.strip() if "currency" in d.columns else pd.Series([""]*len(d), index=d.index)
+
         out = pd.DataFrame({
             "bank": d["bank"].astype(str).str.strip(),
-            "supplier": d.get("supplier", ""),
-            "currency": d.get("currency", ""),
+            "supplier": supplier_series,
+            "currency": currency_series,
             "amount": d[amt_col].map(_to_number),
             "status": d["status"].astype(str).str.strip().str.title()
         })
@@ -449,16 +468,27 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Reads Settlements and supports an explicit 'Balance Due' column.
+    If 'amount' is missing, falls back to 'balance_due' so existing visuals keep working.
+    """
     try:
         d = cols_lower(df)
+
         ref_col = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
         bank_col = next((c for c in d.columns if (c.startswith("bank") or "bank" in c)), None)
         date_col = next((c for c in d.columns if ("maturity" in c and "new" not in c)), None) or \
-                   next((c for c in d.columns if ("new" in c and "maturity" in c)), None)
+                   next((c for c in d.columns if ("new" in c and "maturity" in c)), None) or \
+                   next((c for c in d.columns if ("settlement" in c and "date" in c)), None)
+
         amount_col = next((c for c in d.columns if ("balance" in c and "settlement" in c)), None) or \
                      next((c for c in d.columns if ("currently" in c and "due" in c)), None) or \
                      next((c for c in ["amount(sar)", "amount"] if c in d.columns), None)
-        if not all([bank_col, amount_col, date_col]): return pd.DataFrame()
+
+        balance_due_col = next((c for c in d.columns if ("balance" in c and "due" in c)), None)
+
+        if not bank_col or not date_col:
+            return pd.DataFrame()
 
         status_col = next((c for c in d.columns if "status" in c), None)
         type_col   = next((c for c in d.columns if "type" in c), None)
@@ -468,15 +498,29 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
             "reference": d[ref_col].astype(str).str.strip() if ref_col else "",
             "bank": d[bank_col].astype(str).str.strip(),
             "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
-            "amount": d[amount_col].map(_to_number),
+            "amount": d[amount_col].map(_to_number) if amount_col else np.nan,
             "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
             "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
             "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
             "description": ""
         })
-        out = out.dropna(subset=["bank", "amount", "settlement_date"])
-        if "status" in out.columns:
+
+        if balance_due_col:
+            out["balance_due"] = d[balance_due_col].map(_to_number)
+
+        # Fallback so downstream visuals still work
+        if out["amount"].isna().all() and "balance_due" in out.columns:
+            out["amount"] = out["balance_due"]
+
+        out = out.dropna(subset=["bank", "settlement_date"])
+        if "balance_due" in out.columns:
+            out = out[out["amount"].notna() | out["balance_due"].notna()]
+        else:
+            out = out.dropna(subset=["amount"])
+
+        if "status" in out.columns and out["status"].notna().any():
             out = out[out["status"].str.lower() == "pending"].copy()
+
         return out
     except Exception:
         return pd.DataFrame()
@@ -812,7 +856,9 @@ def main():
                 with k2: st.metric("# of LCs", len(lc_m))
                 with k3:
                     upcoming = lc_m[lc_m["settlement_date"] >= today0_local]
-                    st.metric("Remaining in Month", fmt_number_only(upcoming["amount"].sum()))
+                    # Use Balance Due when present; otherwise fall back to amount
+                    rem_col = "balance_due" if "balance_due" in lc_m.columns else "amount"
+                    st.metric("Remaining in Month", fmt_number_only(upcoming[rem_col].sum()))
                 try:
                     import plotly.io as pio, plotly.graph_objects as go
                     if "brand" not in pio.templates:
@@ -1169,10 +1215,10 @@ def main():
                 except Exception:
                     st.line_chart(view_fx.pivot_table(index="date_only", columns="currency", values="rate"))
 
-    # ---- Facility Report tab (placeholder) ----
+    # ---- Facility Report tab (hidden placeholder) ----
     with tab_facility:
         st.markdown('<span class="section-chip">🏗️ Facility Report</span>', unsafe_allow_html=True)
-        st.info("Hook this tab to your facilities dataset (limits, utilizations, expiries). Once you share the sheet/GID, I’ll wire it up.")
+        # Intentionally left blank (previous info box removed)
 
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
