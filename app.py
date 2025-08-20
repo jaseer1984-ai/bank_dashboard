@@ -987,6 +987,8 @@ def create_download_link(val, filename):
     """Generate download link for PDF"""
     b64 = base64.b64encode(val).decode()
     return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">Download PDF Report</a>'
+
+def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
     if df_raw.empty:
         return np.nan
     try:
@@ -1017,10 +1019,102 @@ def create_download_link(val, filename):
     except Exception:
         pass
     return np.nan
-
+    if df_raw.empty:
+        return np.nan
+    try:
+        d = df_raw.copy()
+        mask = d.applymap(lambda x: isinstance(x, str) and ("balance due" in x.strip().lower()))
+        if mask.any().any():
+            coords = np.argwhere(mask.values)
+            r, c = coords[0]
+            row_vals = d.iloc[r].apply(_to_number)
+            after = row_vals.iloc[c+1:]
+            cand = after[after.notna()]
+            if not cand.empty:
+                return float(cand.iloc[0])
+            row_nums = row_vals[row_vals.notna()]
+            if not row_nums.empty:
+                return float(row_nums.iloc[-1])
+        col = next((col for col in d.columns if isinstance(col, str) and "balance due" in col.strip().lower()), None)
+        if col:
+            series = d[col].apply(_to_number).dropna()
+            if not series.empty:
+                return float(series.iloc[-1])
+        for _, row in d.iterrows():
+            if any(isinstance(v, str) and "balance due" in v.lower() for v in row):
+                nums = [ _to_number(v) for v in row ]
+                nums = [x for x in nums if not pd.isna(x)]
+                if nums:
+                    return float(nums[-1])
+    except Exception:
 # ----------------------------
 # Header
 # ----------------------------
+def render_header():
+    st.markdown('<div class="top-gradient"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+    c_logo, c_title = st.columns([0.08, 0.92])
+    with c_logo:
+        try: st.image(config.LOGO_PATH, width=44)
+        except Exception: st.markdown("💰", help="Logo not found")
+    with c_title:
+        name = config.COMPANY_NAME.upper()
+        st.markdown(f"<h1 style='margin:0; font-weight:900; color:#1f2937;'>{name}</h1>", unsafe_allow_html=True)
+        st.caption(f"Enhanced Treasury Dashboard — Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+# ----------------------------
+# Sidebar
+# ----------------------------
+def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=True):
+    with st.sidebar:
+        st.markdown("### 🔄 Refresh")
+        if st.button("Refresh Now", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+        # FX toggle restored
+        if show_fx:
+            st.markdown("### 💱 Exchange Rates")
+            fx_enabled = st.toggle("Show FX Data", 
+                                 value=st.session_state.get("show_fx", True),
+                                 help="Toggle exchange rate information")
+            st.session_state["show_fx"] = fx_enabled
+
+        st.markdown("### 📊 Key Metrics")
+        def _kpi(title, value, bg, border, color):
+            st.markdown(
+                f"""
+                <div style="background:{bg};border:1px solid {border};border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 6px rgba(0,0,0,.04);">
+                    <div style="font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{title}</div>
+                    <div style="font-size:20px;font-weight:800;color:{color};text-align:right;">{(f"{float(value):,.0f}" if value else "N/A")}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        _kpi("TOTAL BALANCE", total_balance, THEME["heading_bg"], THEME["accent1"], "#1E3A8A")
+        _kpi("APPROVED PAYMENTS", approved_sum, THEME["heading_bg"], THEME["accent2"], "#065F46")
+        _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, THEME["heading_bg"], THEME["accent1"], "#92400E")
+        _kpi("ACTIVE BANKS", banks_cnt, THEME["heading_bg"], THEME["accent2"], "#9F1239")
+
+        st.markdown("---")
+        st.markdown("### ⚙️ Controls")
+        do_auto = st.toggle("Auto refresh",
+                            value=st.session_state.get("auto_refresh", False),
+                            help="Automatically refresh the dashboard.")
+        every_sec = st.number_input("Every (seconds)", min_value=15, max_value=900,
+                                    value=int(st.session_state.get("auto_interval", 120)), step=15)
+        st.session_state["auto_refresh"] = bool(do_auto)
+        st.session_state["auto_interval"] = int(every_sec)
+
+        st.markdown("### 🎨 Theme")
+        sel = st.selectbox("Palette", list(PALETTES.keys()),
+                           index=list(PALETTES.keys()).index(st.session_state["palette_name"]))
+        if sel != st.session_state["palette_name"]:
+            st.session_state["palette_name"] = sel
+            st.rerun()
+
+        density = st.toggle("Compact density", value=st.session_state.get("compact_density", False))
+        st.session_state["compact_density"] = density
 def render_header():
     st.markdown('<div class="top-gradient"></div>', unsafe_allow_html=True)
     st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
@@ -1197,6 +1291,55 @@ def main():
             today0_local = pd.Timestamp.today().normalize()
         month_start = today0_local.replace(day=1)
         month_end = (month_start + pd.offsets.MonthEnd(1)).normalize()
+
+        # Month Report Generation Section
+        st.markdown('<span class="section-chip">📄 Monthly Report Generation</span>', unsafe_allow_html=True)
+        
+        col_report1, col_report2, col_report3 = st.columns([2, 1, 1])
+        with col_report1:
+            st.markdown("**Generate comprehensive monthly treasury report with detailed insights, analysis, and recommendations.**")
+            st.markdown(f"📅 **Report Period:** {month_start.strftime('%B %Y')}")
+            st.markdown(f"📊 **Data Coverage:** Bank balances, LC settlements, supplier payments, FX movements, branch performance")
+        
+        with col_report2:
+            if st.button("📄 Generate PDF Report", type="primary", use_container_width=True):
+                if REPORTLAB_AVAILABLE:
+                    try:
+                        with st.spinner("Generating comprehensive monthly report..."):
+                            pdf_bytes = generate_monthly_pdf_report(
+                                month_start, month_end, df_by_bank, df_lc, df_pay_approved,
+                                df_fm, df_fx, df_cvp, balance_due_value, total_balance,
+                                approved_sum, lc_next4_sum
+                            )
+                            
+                            # Create download button
+                            filename = f"Treasury_Monthly_Report_{month_start.strftime('%Y_%m')}.pdf"
+                            st.download_button(
+                                label="📥 Download Report",
+                                data=pdf_bytes,
+                                file_name=filename,
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                            st.success("✅ Monthly report generated successfully!")
+                    except Exception as e:
+                        st.error(f"❌ Error generating report: {str(e)}")
+                else:
+                    st.error("❌ PDF generation requires ReportLab library. Install with: `pip install reportlab`")
+        
+        with col_report3:
+            st.markdown("**📋 Report Contents:**")
+            st.markdown("""
+            • Executive Summary
+            • Bank Balance Analysis  
+            • LC Settlements
+            • Supplier Payments
+            • Exchange Rate Analysis
+            • Branch Performance
+            • Key Recommendations
+            """)
+        
+        st.markdown("---")
 
         st.markdown('<span class="section-chip">📅 Month-to-Date — Detailed Insights</span>', unsafe_allow_html=True)
 
