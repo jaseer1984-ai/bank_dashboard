@@ -495,34 +495,8 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
         st.error(f"❌ Bank balance parsing failed: {str(e)}")
     return pd.DataFrame(), None
 
-def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
-    try:
-        d = cols_lower(df).rename(
-            columns={"supplier name": "supplier",
-                     "amount(sar)": "amount_sar",
-                     "order/sh/branch": "order_branch"}
-        )
-        if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
-            return pd.DataFrame()
+"status": d["status"].astype(str).str.strip().str.title()
 
-        amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
-        if not amt_col:
-            return pd.DataFrame()
-
-        out = pd.DataFrame({
-            "bank": d["bank"].astype(str).str.strip(),
-            "supplier": d.get("supplier", ""),
-            "currency": d.get("currency", ""),
-            "amount": d[amt_col].map(_to_number),
-            "status": d["status"].astype(str).strip().str.title()
-        })
-
-        out = out.dropna(subset=["amount"])
-        out = out[out["bank"].ne("")]
-        return out
-    except Exception as e:
-        st.error(f"❌ Supplier payments parsing failed: {str(e)}")
-        return pd.DataFrame()
 
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     try:
@@ -1281,3 +1255,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
