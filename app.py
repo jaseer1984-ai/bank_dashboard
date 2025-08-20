@@ -789,6 +789,154 @@ def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
     except Exception:
         pass
     return np.nan
+
+# ----------------------------
+# PDF Report Generation
+# ----------------------------
+def generate_monthly_pdf_report(month_start, month_end, df_by_bank, df_lc, df_pay_approved, 
+                                df_fm, df_fx, df_cvp, balance_due_value, total_balance, 
+                                approved_sum, lc_next4_sum) -> bytes:
+    """Generate comprehensive monthly PDF report"""
+    if not REPORTLAB_AVAILABLE:
+        raise ImportError("ReportLab is required for PDF generation. Install with: pip install reportlab")
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, 
+                           topMargin=2*cm, bottomMargin=2*cm)
+    
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        spaceAfter=30,
+        alignment=TA_CENTER,
+        textColor=HexColor('#1f2937'),
+        fontName='Helvetica-Bold'
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        spaceAfter=12,
+        spaceBefore=20,
+        textColor=HexColor('#3b5bfd'),
+        fontName='Helvetica-Bold'
+    )
+    
+    body_style = ParagraphStyle(
+        'CustomBody',
+        parent=styles['Normal'],
+        fontSize=10,
+        spaceAfter=6,
+        alignment=TA_JUSTIFY,
+        fontName='Helvetica'
+    )
+    
+    # Story (content) list
+    story = []
+    
+    # Cover Page
+    story.append(Spacer(1, 2*inch))
+    story.append(Paragraph(config.COMPANY_NAME.upper(), title_style))
+    story.append(Spacer(1, 0.5*inch))
+    story.append(Paragraph("TREASURY MONTHLY REPORT", title_style))
+    story.append(Spacer(1, 0.3*inch))
+    
+    period_text = f"Period: {month_start.strftime('%B %Y')}"
+    story.append(Paragraph(period_text, heading_style))
+    story.append(Spacer(1, 0.3*inch))
+    
+    generated_text = f"Generated on: {datetime.now().strftime('%B %d, %Y at %H:%M')}"
+    story.append(Paragraph(generated_text, body_style))
+    story.append(Spacer(1, 2*inch))
+    
+    # Executive Summary Table
+    exec_summary_data = [
+        ['EXECUTIVE SUMMARY', ''],
+        ['Total Available Balance', f'SAR {total_balance:,.0f}'],
+        ['Approved Payments', f'SAR {approved_sum:,.0f}'],
+        ['LC Due (Next 4 Days)', f'SAR {lc_next4_sum:,.0f}'],
+        ['Active Banks', f'{len(df_by_bank) if not df_by_bank.empty else 0}'],
+        ['Balance Due (Month)', f'SAR {balance_due_value:,.0f}' if pd.notna(balance_due_value) else 'N/A'],
+    ]
+    
+    exec_table = Table(exec_summary_data, colWidths=[3*inch, 2*inch])
+    exec_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (1, 0), HexColor('#3b5bfd')),
+        ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f8fafc')),
+        ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0'))
+    ]))
+    story.append(exec_table)
+    story.append(PageBreak())
+    
+    # Bank Balance Analysis
+    story.append(Paragraph("1. BANK BALANCE ANALYSIS", heading_style))
+    if not df_by_bank.empty:
+        bank_data = [['Bank', 'Available Balance']]
+        for _, row in df_by_bank.head(10).iterrows():
+            bank_data.append([row['bank'], f"SAR {row['balance']:,.0f}"])
+        
+        bank_table = Table(bank_data, colWidths=[3*inch, 2*inch])
+        bank_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#3b5bfd')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f8fafc')),
+            ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0'))
+        ]))
+        story.append(bank_table)
+    else:
+        story.append(Paragraph("No bank balance data available.", body_style))
+    
+    # LC Settlements
+    story.append(Spacer(1, 20))
+    story.append(Paragraph("2. LC SETTLEMENTS", heading_style))
+    if not df_lc.empty:
+        lc_month = df_lc[(df_lc["settlement_date"] >= month_start) & (df_lc["settlement_date"] <= month_end)]
+        lc_summary = f"During {month_start.strftime('%B %Y')}, there were {len(lc_month)} LC settlements totaling SAR {lc_month['amount'].sum():,.0f}."
+        story.append(Paragraph(lc_summary, body_style))
+    else:
+        story.append(Paragraph("No LC settlement data available.", body_style))
+    
+    # Supplier Payments
+    story.append(Spacer(1, 20))
+    story.append(Paragraph("3. SUPPLIER PAYMENTS", heading_style))
+    if not df_pay_approved.empty:
+        payment_summary = f"Total approved payments: SAR {df_pay_approved['amount'].sum():,.0f} across {len(df_pay_approved)} transactions."
+        story.append(Paragraph(payment_summary, body_style))
+    else:
+        story.append(Paragraph("No approved payments data available.", body_style))
+    
+    # Exchange Rates
+    if not df_fx.empty:
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("4. EXCHANGE RATES", heading_style))
+        latest_fx = df_fx.groupby("currency_pair").last().reset_index()
+        fx_summary = f"Exchange rate monitoring covers {len(latest_fx)} currency pairs."
+        story.append(Paragraph(fx_summary, body_style))
+    
+    # Footer
+    story.append(Spacer(1, 30))
+    footer_text = f"Report generated by Treasury Management System on {datetime.now().strftime('%B %d, %Y at %H:%M')}. Powered by Jaseer Pykkarathodi."
+    story.append(Paragraph(footer_text, body_style))
+    
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
     if df_raw.empty:
         return np.nan
     try:
