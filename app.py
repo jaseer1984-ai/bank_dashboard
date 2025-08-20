@@ -494,17 +494,24 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     try:
         d = cols_lower(df)
+
         ref_col = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
         bank_col = next((c for c in d.columns if (c.startswith("bank") or "bank" in c)), None)
+
+        # date column: prefer “maturity” then “new maturity”
         date_col = next((c for c in d.columns if ("maturity" in c and "new" not in c)), None) or \
                    next((c for c in d.columns if ("new" in c and "maturity" in c)), None)
+
+        # amount column: try several possibilities
         amount_col = next((c for c in d.columns if ("balance" in c and "settlement" in c)), None) or \
                      next((c for c in d.columns if ("currently" in c and "due" in c)), None) or \
                      next((c for c in ["amount(sar)", "amount"] if c in d.columns), None)
+
         if not all([bank_col, amount_col, date_col]):
             return pd.DataFrame()
+
         status_col = next((c for c in d.columns if "status" in c), None)
-        type_col = next((c for c in d.columns if "type" in c), None)
+        type_col   = next((c for c in d.columns if "type" in c), None)
         remark_col = next((c for c in d.columns if "remark" in c), None)
 
         out = pd.DataFrame({
@@ -512,14 +519,21 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
             "bank": d[bank_col].astype(str).str.strip(),
             "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
             "amount": d[amount_col].map(_to_number),
-            "status": d[status_col].astype(str).title().strip() if status_col else "",
-            "type": d[type_col].astype(str).upper().strip() if type_col else "",
-            "remark": d[remark_col].astype(str).strip() if remark_col else "",
+            "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
+            "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
+            "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
             "description": ""
         })
+
+        # keep valid rows only
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
-        out = out[out["status"].str.lower() == "pending"].copy()
+
+        # keep Pending only (case-insensitive)
+        if "status" in out.columns:
+            out = out[out["status"].str.lower() == "pending"].copy()
+
         return out
+
     except Exception as e:
         st.error(f"❌ Settlements parsing failed: {str(e)}")
         return pd.DataFrame()
@@ -1243,3 +1257,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
