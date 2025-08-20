@@ -1,8 +1,19 @@
 # app.py — Enhanced Treasury Dashboard (Themed, Tabs)
-# - "Remaining in Month" shows Balance Due from Settlements sheet
-# - Comma-separated numeric formatting (with decimals where needed)
-# - Plotly toolbars hidden
-# - All other features preserved
+# - Theme palettes + density toggle
+# - Section chips, subtle hover, brand Plotly
+# - Negative balances show light-red card + red amount
+# - Light-blue headers on tables/cards
+# - After Settlement on cards, CVP by Branch, Auto-refresh, Footer
+# - Refresh button in sidebar (above Key Metrics)
+# - Key Metrics above Controls in sidebar
+# - Quick Insights near top-left; hides Top Bank & Concentration Risk items
+# - Insights for negative banks and negative after-settlement
+# - Sidebar button to toggle Exchange Rate section (💱) [kept for convenience]
+# - FX chart shows DATE ONLY (no time)
+# - ✅ Tabs: Overview (monthly insights), Bank, Settlements, Supplier Payments, Exchange Rate, Facility Report
+# - ✅ "Remaining in Month" shows Balance Due from Settlements sheet
+# - ✅ Rename "Total LC (Month)" → "Current Due"
+# - ✅ Hide Facility placeholder message
 
 import io
 import time
@@ -117,8 +128,6 @@ THEME = {
     "icons": {"best": "💎", "good": "🔹", "ok": "💠", "low": "💚", "neg": "⚠️"},
     "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},
 }
-PLOTLY_CONFIG = {"displayModeBar": False, "displaylogo": False, "responsive": True}
-
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -206,16 +215,12 @@ def fmt_currency(v, currency="SAR") -> str:
     except Exception:
         return str(v)
 
-def fmt_number(v, decimals: int = 0) -> str:
-    """Format plain numbers with comma separation and custom decimals."""
+def fmt_number_only(v) -> str:
     try:
         if pd.isna(v): return "N/A"
-        return f"{float(v):,.{decimals}f}"
+        return f"{float(v):,.0f}"
     except Exception:
         return str(v)
-
-def fmt_number_only(v) -> str:
-    return fmt_number(v, 0)
 
 def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
     if num_cols is None:
@@ -467,7 +472,7 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
             "bank": d[bank_col].astype(str).str.strip(),
             "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
             "amount": d[amount_col].map(_to_number),
-            "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
+            "status": d[status_col].astype(str).title().str.strip() if status_col else "",
             "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
             "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
             "description": ""
@@ -541,49 +546,44 @@ def parse_exchange_rate(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
+# ---------- Balance Due extractor (for "Remaining in Month") ----------
+def get_balance_due_from_sheet(df_raw: pd.DataFrame) -> float:
     """
-    Robustly extract 'Balance Due' value from the Settlements sheet dump (any layout).
-    Looks for a cell containing 'balance due' and returns the first numeric in the same row (prefer to the right).
-    Falls back to a column header containing 'balance due'.
+    Tries to find a 'Balance Due' value anywhere in the raw settlements sheet.
+    Strategy:
+      1) Look for any cell that contains 'balance due' (case-insensitive). If found,
+         return the right-most numeric on that row.
+      2) If not found, look for a column whose header contains 'balance' and 'due' and
+         take the last numeric.
+      3) Fallback: return NaN.
     """
-    if df_raw.empty:
-        return np.nan
     try:
+        if df_raw.empty:
+            return np.nan
+
+        # Normalize a copy to strings
         d = df_raw.copy()
+        d_cols = [str(c) for c in d.columns]
+        d.columns = d_cols
+        d_str = d.astype(str)
 
-        # 1) Find any cell text containing "balance due"
-        mask = d.applymap(lambda x: isinstance(x, str) and ("balance due" in x.strip().lower()))
-        if mask.any().any():
-            coords = np.argwhere(mask.values)
-            r, c = coords[0]  # first match
-            row_vals = d.iloc[r].apply(_to_number)
+        # (1) Search any cell text 'balance due'
+        cell_mask = d_str.applymap(lambda s: "balance" in s.strip().lower() and "due" in s.strip().lower())
+        if cell_mask.values.any():
+            row_idx = np.where(cell_mask.values.any(axis=1))[0][0]
+            row_vals = d.iloc[row_idx].tolist()
+            nums = [ _to_number(v) for v in row_vals if pd.notna(_to_number(v)) ]
+            if nums:
+                return float(nums[-1])  # pick right-most numeric
 
-            # Prefer first numeric cell to the right of the label
-            after = row_vals.iloc[c+1:]
-            cand = after[after.notna()]
-            if not cand.empty:
-                return float(cand.iloc[0])
+        # (2) Search for a Balance Due-like column
+        col_candidates = [c for c in d.columns if ("balance" in c.lower() and "due" in c.lower())]
+        if col_candidates:
+            ser = d[col_candidates[0]].map(_to_number)
+            ser = ser.dropna()
+            if not ser.empty:
+                return float(ser.iloc[-1])
 
-            # Otherwise any numeric in the row (last one)
-            row_nums = row_vals[row_vals.notna()]
-            if not row_nums.empty:
-                return float(row_nums.iloc[-1])
-
-        # 2) Maybe it's a column header named "Balance Due"
-        col = next((col for col in d.columns if isinstance(col, str) and "balance due" in col.strip().lower()), None)
-        if col:
-            series = d[col].apply(_to_number).dropna()
-            if not series.empty:
-                return float(series.iloc[-1])
-
-        # 3) Row label in one column, number in another
-        for idx, row in d.iterrows():
-            if any(isinstance(v, str) and "balance due" in v.lower() for v in row):
-                nums = [ _to_number(v) for v in row ]
-                nums = [x for x in nums if not pd.isna(x)]
-                if nums:
-                    return float(nums[-1])
     except Exception:
         pass
     return np.nan
@@ -679,7 +679,6 @@ def main():
 
     df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
     df_lc = parse_settlements(df_lc_raw)
-    balance_due_value = extract_balance_due_value(df_lc_raw)  # <<-- Balance Due from sheet
 
     df_fm_raw = read_csv(LINKS["Fund Movement"])
     df_fm = parse_fund_movement(df_fm_raw)
@@ -700,6 +699,9 @@ def main():
     next4 = today0 + pd.Timedelta(days=3)
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0
+
+    # Extract Balance Due from Settlements raw
+    balance_due_value = get_balance_due_from_sheet(df_lc_raw)
 
     # Sidebar
     render_sidebar({}, total_balance, approved_sum, lc_next4_sum, banks_cnt)
@@ -808,7 +810,7 @@ def main():
                         fig.update_layout(template="brand", height=320, margin=dict(l=20,r=20,t=10,b=10),
                                           xaxis_title=None, yaxis_title="Liquidity (SAR)", showlegend=False)
                         fig.update_xaxes(tickformat="%b %d", rangeslider_visible=False, rangeselector=None)
-                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                        st.plotly_chart(fig, use_container_width=True)
                     except Exception:
                         st.line_chart(fm_m.set_index("date")["total_liquidity"])
 
@@ -834,14 +836,9 @@ def main():
         with c2:
             st.subheader("Top Banks by Balance (Snapshot)")
             if not df_by_bank.empty:
-                # include After Settlement when available
-                topn = df_by_bank.sort_values("balance", ascending=False).head(8).copy()
-                rename_map = {"bank": "Bank", "balance": "Balance"}
-                if "after_settlement" in topn.columns:
-                    rename_map["after_settlement"] = "After Settlement"
-                topn = topn.rename(columns=rename_map)
-                num_cols = [c for c in ["Balance", "After Settlement"] if c in topn.columns]
-                st.dataframe(style_right(topn, num_cols=num_cols), use_container_width=True, height=320)
+                topn = df_by_bank.sort_values("balance", ascending=False).head(8).rename(
+                    columns={"bank":"Bank","balance":"Balance"})
+                st.dataframe(style_right(topn, num_cols=["Balance"]), use_container_width=True, height=320)
             else:
                 st.info("No bank balances available.")
 
@@ -859,11 +856,13 @@ def main():
                 lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
                 weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
                 k1, k2, k3 = st.columns(3)
-                with k1: st.metric("Total LC (Month)", fmt_number_only(lc_m["amount"].sum()))
+                # ❶ Rename the left KPI
+                with k1: st.metric("Current Due", fmt_number_only(lc_m["amount"].sum()))
                 with k2: st.metric("# of LCs", len(lc_m))
                 with k3:
-                    # >>> Show Balance Due from sheet <<<
-                    st.metric("Remaining in Month", fmt_number(balance_due_value, 2))
+                    # ❷ "Remaining in Month" -> Balance Due value from sheet (comma formatted)
+                    val = balance_due_value if pd.notna(balance_due_value) else lc_m.loc[lc_m["settlement_date"] >= today0, "amount"].sum()
+                    st.metric("Remaining in Month", fmt_number_only(val))
                 try:
                     import plotly.io as pio, plotly.graph_objects as go
                     if "brand" not in pio.templates:
@@ -873,7 +872,7 @@ def main():
                     fig = go.Figure(go.Bar(x=weekly["week"], y=weekly["amount"]))
                     fig.update_layout(template="brand", height=280, margin=dict(l=20,r=20,t=10,b=10),
                                       xaxis_title="ISO Week", yaxis_title="Amount (SAR)", showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    st.plotly_chart(fig, use_container_width=True)
                 except Exception:
                     st.bar_chart(weekly.set_index("week")["amount"])
                 detail = lc_m[["bank","settlement_date","amount","type","remark"]].rename(
@@ -919,7 +918,7 @@ def main():
                         fig.update_layout(template="brand", height=300, margin=dict(l=20,r=20,t=10,b=10),
                                           xaxis_title=None, yaxis_title="Rate (SAR)")
                         fig.update_xaxes(tickformat="%b %d", rangeslider_visible=False, rangeselector=None)
-                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                        st.plotly_chart(fig, use_container_width=True)
                 except Exception:
                     pass
 
@@ -984,13 +983,8 @@ def main():
             elif view == "Metrics":
                 display_as_metrics(df_bal_view, "bank", "balance")
             else:
-                table = df_bal_view.copy()
-                rename_map = {"bank": "Bank", "balance": "Balance"}
-                if "after_settlement" in table.columns:
-                    rename_map["after_settlement"] = "After Settlement"
-                table = table.rename(columns=rename_map)
-                num_cols = [c for c in ["Balance", "After Settlement"] if c in table.columns]
-                st.dataframe(style_right(table, num_cols=num_cols), use_container_width=True, height=360)
+                table = df_bal_view.rename(columns={"bank": "Bank", "balance": "Balance"})
+                st.dataframe(style_right(table, num_cols=["Balance"]), use_container_width=True, height=360)
 
         st.markdown("---")
         st.markdown('<span class="section-chip">📈 Liquidity Trend Analysis</span>', unsafe_allow_html=True)
@@ -1021,7 +1015,7 @@ def main():
                                       xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
                                       margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
                     fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
-                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    st.plotly_chart(fig, use_container_width=True)
                 with c2:
                     st.markdown("### 📊 Liquidity Metrics")
                     st.metric("Current", fmt_number_only(latest_liquidity))
@@ -1056,7 +1050,7 @@ def main():
                                       height=420, margin=dict(l=20, r=20, t=30, b=80),
                                       xaxis_title="Branch", yaxis_title="Amount (SAR)",
                                       legend_title_text="")
-                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    st.plotly_chart(fig, use_container_width=True)
                 except Exception:
                     st.bar_chart(cvp_sorted.set_index("branch")[["collection", "payments"]])
             elif cvp_view == "Table":
@@ -1221,14 +1215,14 @@ def main():
                                       xaxis_title=None, yaxis_title="Rate (SAR)", showlegend=True)
                     fig.update_xaxes(tickformat="%b %d, %Y", showticklabels=True, rangeslider_visible=False, rangeselector=None)
                     fig.update_traces(hovertemplate="%{x|%b %d, %Y}<br>Rate: %{y}<extra>%{fullData.name}</extra>")
-                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    st.plotly_chart(fig, use_container_width=True)
                 except Exception:
                     st.line_chart(view_fx.pivot_table(index="date_only", columns="currency", values="rate"))
 
-    # ---- Facility Report tab (placeholder) ----
+    # ---- Facility Report tab (kept, but message hidden) ----
     with tab_facility:
         st.markdown('<span class="section-chip">🏗️ Facility Report</span>', unsafe_allow_html=True)
-        st.info("Hook this tab to your facilities dataset (limits, utilizations, expiries). Once you share the sheet/GID, I’ll wire it up.")
+        # Intentionally no message/text here now.
 
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
