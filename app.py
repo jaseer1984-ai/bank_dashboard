@@ -1247,7 +1247,7 @@ def main():
     # ---- Facility Report tab (placeholder) ----
     with tab_facility:
         st.markdown('<span class="section-chip">🏗️ Facility Report</span>', unsafe_allow_html=True)
-        st.info("Hook this tab to your facilities dataset (limits, utilizations, expiries). Once you share the sheet/GID, I’ll wire it up.")
+      
 
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
@@ -1260,5 +1260,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
