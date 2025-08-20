@@ -449,35 +449,54 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
 def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
     try:
         d = cols_lower(df)
-        ref_col = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
-        bank_col = next((c for c in d.columns if (c.startswith("bank") or "bank" in c)), None)
-        date_col = next((c for c in d.columns if ("maturity" in c and "new" not in c)), None) or \
-                   next((c for c in d.columns if ("new" in c and "maturity" in c)), None)
-        amount_col = next((c for c in d.columns if ("balance" in c and "settlement" in c)), None) or \
-                     next((c for c in d.columns if ("currently" in c and "due" in c)), None) or \
-                     next((c for c in ["amount(sar)", "amount"] if c in d.columns), None)
-        if not all([bank_col, amount_col, date_col]): return pd.DataFrame()
 
+        # --- find key columns (broader matching) ---
+        bank_col = next((c for c in d.columns if "bank" in c), None)
+
+        # date: settlement date / maturity date / due date / generic date
+        date_col = next((c for c in d.columns if "settlement" in c and "date" in c), None) or \
+                   next((c for c in d.columns if "maturity" in c and "new" not in c), None) or \
+                   next((c for c in d.columns if "due" in c and "date" in c), None) or \
+                   next((c for c in d.columns if c.strip().lower() == "date"), None)
+
+        # amount: balance due / currently due / balance settlement / amount(sar) / amount / value
+        amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
+                     next((c for c in d.columns if "currently" in c and "due" in c), None) or \
+                     next((c for c in d.columns if "balance" in c and "settlement" in c), None) or \
+                     next((c for c in ["amount(sar)", "amount", "value"] if c in d.columns), None)
+
+        # optional columns
         status_col = next((c for c in d.columns if "status" in c), None)
         type_col   = next((c for c in d.columns if "type" in c), None)
         remark_col = next((c for c in d.columns if "remark" in c), None)
+        ref_col    = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
+
+        if not all([bank_col, date_col, amount_col]):
+            return pd.DataFrame()
 
         out = pd.DataFrame({
             "reference": d[ref_col].astype(str).str.strip() if ref_col else "",
             "bank": d[bank_col].astype(str).str.strip(),
             "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
             "amount": d[amount_col].map(_to_number),
-            "status": d[status_col].astype(str).str.title().str.strip() if status_col else "",
+            "status": d[status_col].astype(str).str.strip() if status_col else None,
             "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
             "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
             "description": ""
         })
+
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
-        if "status" in out.columns:
-            out = out[out["status"].str.lower() == "pending"].copy()
-        return out
+
+        # Filter to pending only when a real status column exists and contains 'pending'
+        if status_col:
+            has_pending = out["status"].str.contains("pending", case=False, na=False).any()
+            if has_pending:
+                out = out[out["status"].str.contains("pending", case=False, na=False)]
+
+        return out.reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
+
 
 def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
     try:
@@ -1241,3 +1260,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
