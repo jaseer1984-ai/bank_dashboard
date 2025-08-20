@@ -1,9 +1,9 @@
-# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Hidden)
+# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
 # - Comma-separated numeric formatting (with decimals where needed)
 # - Plotly toolbars hidden
 # - Colored tabs via CSS (no Streamlit tab code changes needed)
-# - Exchange Rates fully hidden (no sidebar toggle, no Overview FX, no FX tab)
+# - Exchange Rates functionality restored
 
 import io
 import time
@@ -120,7 +120,7 @@ THEME = {
 }
 PLOTLY_CONFIG = {"displayModeBar": False, "displaylogo": False, "responsive": True}
 
-# --- Colored tabs (pure CSS) ---
+# --- Colored tabs (pure CSS) - Added FX tab styling ---
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -154,9 +154,12 @@ st.markdown(f"""
   /* Supplier Payments */
   [data-testid="stTabs"] button[role="tab"]:nth-child(4) {{ background:#dcfce7; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(4) {{ background:#bbf7d0; }}
+  /* Exchange Rates */
+  [data-testid="stTabs"] button[role="tab"]:nth-child(5) {{ background:#fef3c7; color:#0f172a; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(5) {{ background:#fde68a; }}
   /* Facility Report */
-  [data-testid="stTabs"] button[role="tab"]:nth-child(5) {{ background:#f1f5f9; color:#0f172a; }}
-  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(5) {{ background:#e2e8f0; }}
+  [data-testid="stTabs"] button[role="tab"]:nth-child(6) {{ background:#f1f5f9; color:#0f172a; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(6) {{ background:#e2e8f0; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,7 +176,7 @@ def create_session() -> requests.Session:
 http_session = create_session()
 
 # ----------------------------
-# Links
+# Links - Exchange Rate link restored
 # ----------------------------
 LINKS = {
     "BANK BALANCE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=860709395",
@@ -181,7 +184,7 @@ LINKS = {
     "SETTLEMENTS": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=978859477",
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
-    # "EXCHANGE_RATE" intentionally omitted/unused to hide FX from UI
+    "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=123456789",  # Add your actual gid
 }
 
 # ----------------------------
@@ -239,6 +242,13 @@ def fmt_number(v, decimals: int = 0) -> str:
 
 def fmt_number_only(v) -> str:
     return fmt_number(v, 0)
+
+def fmt_rate(v, decimals: int = 4) -> str:
+    try:
+        if pd.isna(v): return "N/A"
+        return f"{float(v):.{decimals}f}"
+    except Exception:
+        return str(v)
 
 def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
     if num_cols is None:
@@ -544,6 +554,71 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
+    """Parse exchange rates data from the spreadsheet"""
+    try:
+        d = cols_lower(df)
+        
+        # Look for currency pairs and rates
+        currency_col = None
+        rate_col = None
+        date_col = None
+        
+        # Find currency column
+        for col in d.columns:
+            if any(term in col for term in ["currency", "pair", "from", "base"]):
+                currency_col = col
+                break
+        
+        # Find rate column  
+        for col in d.columns:
+            if any(term in col for term in ["rate", "exchange", "value", "price"]):
+                rate_col = col
+                break
+                
+        # Find date column
+        for col in d.columns:
+            if any(term in col for term in ["date", "time", "updated"]):
+                date_col = col
+                break
+        
+        if not currency_col or not rate_col:
+            # Try to parse as simple currency/rate format
+            if len(d.columns) >= 2:
+                currency_col = d.columns[0]
+                rate_col = d.columns[1]
+                if len(d.columns) >= 3:
+                    date_col = d.columns[2]
+        
+        if not currency_col or not rate_col:
+            return pd.DataFrame()
+            
+        out = pd.DataFrame({
+            "currency_pair": d[currency_col].astype(str).str.strip(),
+            "rate": d[rate_col].map(_to_number),
+        })
+        
+        if date_col:
+            out["date"] = pd.to_datetime(d[date_col], errors="coerce")
+        else:
+            out["date"] = pd.Timestamp.now()
+            
+        # Clean currency pairs
+        out["currency_pair"] = out["currency_pair"].str.upper()
+        out = out.dropna(subset=["currency_pair", "rate"])
+        out = out[out["currency_pair"].ne("")]
+        
+        # Add change calculation if we have historical data
+        if len(out) > 1 and date_col:
+            out = out.sort_values("date")
+            out["prev_rate"] = out.groupby("currency_pair")["rate"].shift(1)
+            out["change"] = out["rate"] - out["prev_rate"] 
+            out["change_pct"] = (out["change"] / out["prev_rate"]) * 100
+        
+        return out.reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
 def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
     if df_raw.empty:
         return np.nan
@@ -594,14 +669,20 @@ def render_header():
 # ----------------------------
 # Sidebar
 # ----------------------------
-def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt):
+def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=True):
     with st.sidebar:
         st.markdown("### 🔄 Refresh")
         if st.button("Refresh Now", type="primary", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
-        # (FX toggle removed to keep Exchange Rates hidden)
+        # FX toggle restored
+        if show_fx:
+            st.markdown("### 💱 Exchange Rates")
+            fx_enabled = st.toggle("Show FX Data", 
+                                 value=st.session_state.get("show_fx", True),
+                                 help="Toggle exchange rate information")
+            st.session_state["show_fx"] = fx_enabled
 
         st.markdown("### 📊 Key Metrics")
         def _kpi(title, value, bg, border, color):
@@ -662,13 +743,17 @@ def main():
 
     df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
     df_lc = parse_settlements(df_lc_raw)
-    balance_due_value = extract_balance_due_value(df_lc_raw)  # <<-- Balance Due from sheet
+    balance_due_value = extract_balance_due_value(df_lc_raw)
 
     df_fm_raw = read_csv(LINKS["Fund Movement"])
     df_fm = parse_fund_movement(df_fm_raw)
 
     df_cvp_raw = read_csv(LINKS["COLLECTION_BRANCH"])
     df_cvp = parse_branch_cvp(df_cvp_raw)
+
+    # Load exchange rates data
+    df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
+    df_fx = parse_exchange_rates(df_fx_raw)
 
     # KPIs
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
@@ -682,14 +767,14 @@ def main():
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0
 
     # Sidebar
-    render_sidebar({}, total_balance, approved_sum, lc_next4_sum, banks_cnt)
+    render_sidebar({}, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=not df_fx.empty)
 
     # Density tokens
     pad = "12px" if st.session_state.get("compact_density", False) else "20px"
     radius = "10px" if st.session_state.get("compact_density", False) else "12px"
     shadow = "0 1px 6px rgba(0,0,0,.06)" if st.session_state.get("compact_density", False) else "0 2px 8px rgba(0,0,0,.10)"
 
-    # ===== Quick Insights (hide Top Bank & Concentration; show neg balances & after-settlement) =====
+    # ===== Quick Insights =====
     st.markdown('<span class="section-chip">💡 Quick Insights & Recommendations</span>', unsafe_allow_html=True)
     insights = []
     if not df_by_bank.empty:
@@ -731,13 +816,13 @@ def main():
     st.markdown("---")
 
     # =========================
-    # TABS (FX removed)
+    # TABS (FX restored)
     # =========================
-    tab_overview, tab_bank, tab_settlements, tab_payments, tab_facility = st.tabs(
-        ["Overview", "Bank", "Settlements", "Supplier Payments", "Facility Report"]
+    tab_overview, tab_bank, tab_settlements, tab_payments, tab_fx, tab_facility = st.tabs(
+        ["Overview", "Bank", "Settlements", "Supplier Payments", "Exchange Rates", "Facility Report"]
     )
 
-    # ---- Overview: Monthly detailed insights ----
+    # ---- Overview tab ----
     with tab_overview:
         try:
             today0_local = pd.Timestamp.now(tz=config.TZ).tz_localize(None).normalize()
@@ -859,7 +944,26 @@ def main():
 
         st.markdown("---")
 
-        # (FX MTD section removed to keep Exchange Rates hidden)
+        # 3) FX MTD section restored
+        if st.session_state.get("show_fx", True) and not df_fx.empty:
+            st.subheader("Exchange Rates — Month Overview")
+            fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy()
+            if not fx_m.empty:
+                f1, f2 = st.columns(2)
+                with f1:
+                    latest_fx = fx_m.groupby("currency_pair").last().reset_index()
+                    fx_display = latest_fx[["currency_pair", "rate"]].rename(
+                        columns={"currency_pair": "Pair", "rate": "Current Rate"})
+                    st.dataframe(style_right(fx_display, num_cols=["Current Rate"], decimals=4), 
+                               use_container_width=True, height=200)
+                with f2:
+                    if "change_pct" in fx_m.columns:
+                        volatility = fx_m.groupby("currency_pair")["change_pct"].std().reset_index()
+                        volatility = volatility.rename(columns={"currency_pair": "Pair", "change_pct": "Volatility %"})
+                        st.dataframe(style_right(volatility, num_cols=["Volatility %"], decimals=2), 
+                                   use_container_width=True, height=200)
+            else:
+                st.info("No FX data for current month.")
 
         st.subheader("Branches — Net Position (Snapshot)")
         if df_cvp.empty:
@@ -1114,6 +1218,267 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
+    # ---- Exchange Rates tab (restored) ----
+    with tab_fx:
+        st.markdown('<span class="section-chip">💱 Exchange Rates</span>', unsafe_allow_html=True)
+        
+        if df_fx.empty:
+            st.info("No exchange rate data available. Ensure the Exchange Rate sheet has the required columns (Currency Pair, Rate, Date).")
+        else:
+            # FX Display Options
+            fx_view = st.radio("Display as:", options=["Current Rates", "Rate Trends", "Volatility Analysis", "Table View"],
+                              index=0, horizontal=True, key="fx_view")
+            
+            if fx_view == "Current Rates":
+                st.subheader("💱 Current Exchange Rates")
+                
+                # Get latest rates for each currency pair
+                latest_fx = df_fx.groupby("currency_pair").last().reset_index()
+                
+                # Display as cards
+                if not latest_fx.empty:
+                    cols = st.columns(min(4, len(latest_fx)))
+                    for i, row in latest_fx.iterrows():
+                        with cols[int(i) % min(4, len(latest_fx))]:
+                            pair = row["currency_pair"]
+                            rate = row["rate"]
+                            
+                            # Calculate change if available
+                            change_info = ""
+                            if "change_pct" in row and pd.notna(row["change_pct"]):
+                                change_pct = row["change_pct"]
+                                change_color = "#059669" if change_pct >= 0 else "#dc2626"
+                                change_symbol = "📈" if change_pct >= 0 else "📉"
+                                change_info = f"""
+                                <div style="margin-top:8px; font-size:12px; color:{change_color}; font-weight:600;">
+                                    {change_symbol} {change_pct:+.2f}%
+                                </div>
+                                """
+                            
+                            st.markdown(
+                                f"""
+                                <div class="dash-card" style="background:{THEME['heading_bg']};padding:{pad};border-radius:{radius};
+                                     border-left:4px solid {THEME['accent1']};margin-bottom:12px;box-shadow:{shadow};">
+                                    <div style="font-size:12px;color:#0f172a;font-weight:700;margin-bottom:8px;">{pair}</div>
+                                    <div style="font-size:20px;font-weight:800;color:#0f172a;text-align:right;">{fmt_rate(rate)}</div>
+                                    <div style="font-size:10px;color:#1e293b;opacity:.7;margin-top:6px;">Exchange Rate</div>
+                                    {change_info}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                
+                # Summary metrics
+                st.markdown("---")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Currency Pairs", len(latest_fx))
+                with col2:
+                    if "change_pct" in latest_fx.columns:
+                        avg_change = latest_fx["change_pct"].mean()
+                        st.metric("Avg Change %", f"{avg_change:.2f}%" if pd.notna(avg_change) else "N/A")
+                with col3:
+                    last_update = latest_fx["date"].max() if "date" in latest_fx.columns else "N/A"
+                    if pd.notna(last_update):
+                        st.metric("Last Update", last_update.strftime(config.DATE_FMT))
+                    else:
+                        st.metric("Last Update", "N/A")
+            
+            elif fx_view == "Rate Trends":
+                st.subheader("📈 Exchange Rate Trends")
+                
+                if "date" in df_fx.columns and len(df_fx) > 1:
+                    # Date range selector
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        start_date = st.date_input("From Date", 
+                                                 value=df_fx["date"].min().date(),
+                                                 key="fx_start_date")
+                    with c2:
+                        end_date = st.date_input("To Date", 
+                                               value=df_fx["date"].max().date(),
+                                               key="fx_end_date")
+                    
+                    # Filter data
+                    fx_filtered = df_fx[
+                        (df_fx["date"].dt.date >= start_date) & 
+                        (df_fx["date"].dt.date <= end_date)
+                    ].copy()
+                    
+                    if not fx_filtered.empty:
+                        # Currency pair selector
+                        available_pairs = sorted(fx_filtered["currency_pair"].unique())
+                        selected_pairs = st.multiselect("Select Currency Pairs", 
+                                                       available_pairs, 
+                                                       default=available_pairs[:3],
+                                                       key="fx_pairs")
+                        
+                        if selected_pairs:
+                            fx_chart_data = fx_filtered[fx_filtered["currency_pair"].isin(selected_pairs)]
+                            
+                            try:
+                                import plotly.io as pio, plotly.graph_objects as go
+                                if "brand" not in pio.templates:
+                                    pio.templates["brand"] = pio.templates["plotly_white"]
+                                    pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                                    pio.templates["brand"].layout.font.family = APP_FONT
+                                
+                                fig = go.Figure()
+                                for pair in selected_pairs:
+                                    pair_data = fx_chart_data[fx_chart_data["currency_pair"] == pair]
+                                    fig.add_trace(go.Scatter(
+                                        x=pair_data["date"],
+                                        y=pair_data["rate"],
+                                        mode='lines+markers',
+                                        name=pair,
+                                        line=dict(width=2),
+                                        marker=dict(size=4)
+                                    ))
+                                
+                                fig.update_layout(
+                                    template="brand",
+                                    title="Exchange Rate Trends",
+                                    xaxis_title="Date",
+                                    yaxis_title="Exchange Rate",
+                                    height=400,
+                                    margin=dict(l=20, r=20, t=50, b=20)
+                                )
+                                st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                            except Exception:
+                                # Fallback to streamlit line chart
+                                pivot_data = fx_chart_data.pivot(index="date", columns="currency_pair", values="rate")
+                                st.line_chart(pivot_data)
+                        else:
+                            st.info("Please select at least one currency pair to display trends.")
+                    else:
+                        st.info("No data available for the selected date range.")
+                else:
+                    st.info("Insufficient data for trend analysis.")
+            
+            elif fx_view == "Volatility Analysis":
+                st.subheader("📊 Exchange Rate Volatility")
+                
+                if "change_pct" in df_fx.columns:
+                    # Calculate volatility metrics
+                    volatility_stats = df_fx.groupby("currency_pair").agg({
+                        "change_pct": ["std", "mean", "min", "max"],
+                        "rate": "last"
+                    }).round(4)
+                    
+                    volatility_stats.columns = ["Volatility (%)", "Avg Change (%)", "Min Change (%)", "Max Change (%)", "Current Rate"]
+                    volatility_stats = volatility_stats.reset_index()
+                    volatility_stats = volatility_stats.rename(columns={"currency_pair": "Currency Pair"})
+                    
+                    # Sort by volatility
+                    volatility_stats = volatility_stats.sort_values("Volatility (%)", ascending=False)
+                    
+                    # Display table
+                    st.dataframe(
+                        style_right(volatility_stats, 
+                                  num_cols=["Volatility (%)", "Avg Change (%)", "Min Change (%)", "Max Change (%)", "Current Rate"],
+                                  decimals=4),
+                        use_container_width=True,
+                        height=400
+                    )
+                    
+                    # Volatility chart
+                    if len(volatility_stats) > 1:
+                        try:
+                            import plotly.io as pio, plotly.graph_objects as go
+                            fig = go.Figure(go.Bar(
+                                x=volatility_stats["Currency Pair"],
+                                y=volatility_stats["Volatility (%)"],
+                                marker_color=THEME["accent1"]
+                            ))
+                            fig.update_layout(
+                                template="brand",
+                                title="Exchange Rate Volatility by Currency Pair",
+                                xaxis_title="Currency Pair",
+                                yaxis_title="Volatility (%)",
+                                height=300,
+                                margin=dict(l=20, r=20, t=50, b=80)
+                            )
+                            st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                        except Exception:
+                            st.bar_chart(volatility_stats.set_index("Currency Pair")["Volatility (%)"])
+                else:
+                    st.info("Volatility analysis requires historical rate changes.")
+            
+            else:  # Table View
+                st.subheader("📋 Exchange Rate Data Table")
+                
+                # Filters
+                col1, col2 = st.columns(2)
+                with col1:
+                    if "currency_pair" in df_fx.columns:
+                        available_pairs = ["All"] + sorted(df_fx["currency_pair"].unique())
+                        selected_pair = st.selectbox("Filter by Currency Pair", available_pairs, key="fx_table_pair")
+                
+                with col2:
+                    if "date" in df_fx.columns:
+                        date_range = st.number_input("Last N days", min_value=1, max_value=365, value=30, key="fx_date_range")
+                
+                # Apply filters
+                display_data = df_fx.copy()
+                
+                if "date" in display_data.columns:
+                    cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=date_range)
+                    display_data = display_data[display_data["date"] >= cutoff_date]
+                
+                if selected_pair != "All":
+                    display_data = display_data[display_data["currency_pair"] == selected_pair]
+                
+                if not display_data.empty:
+                    # Prepare table
+                    table_data = display_data.copy()
+                    if "date" in table_data.columns:
+                        table_data["Date"] = table_data["date"].dt.strftime(config.DATE_FMT)
+                    
+                    rename_map = {
+                        "currency_pair": "Currency Pair",
+                        "rate": "Rate",
+                        "change": "Change",
+                        "change_pct": "Change %"
+                    }
+                    table_data = table_data.rename(columns={k: v for k, v in rename_map.items() if k in table_data.columns})
+                    
+                    # Select columns to display
+                    display_cols = ["Currency Pair", "Rate"]
+                    if "Date" in table_data.columns:
+                        display_cols.append("Date")
+                    if "Change" in table_data.columns:
+                        display_cols.append("Change")
+                    if "Change %" in table_data.columns:
+                        display_cols.append("Change %")
+                    
+                    display_cols = [col for col in display_cols if col in table_data.columns]
+                    table_show = table_data[display_cols].sort_values("Date" if "Date" in display_cols else "Currency Pair", ascending=False)
+                    
+                    # Apply styling
+                    num_cols = [col for col in ["Rate", "Change", "Change %"] if col in table_show.columns]
+                    styled_table = style_right(table_show, num_cols=num_cols, decimals=4)
+                    
+                    # Color code changes
+                    if "Change %" in table_show.columns:
+                        def highlight_changes(val):
+                            try:
+                                if pd.isna(val):
+                                    return ''
+                                num_val = float(val)
+                                if num_val > 0:
+                                    return 'color: #059669; font-weight: 600;'
+                                elif num_val < 0:
+                                    return 'color: #dc2626; font-weight: 600;'
+                                else:
+                                    return ''
+                            except:
+                                return ''
+                        styled_table = styled_table.applymap(highlight_changes, subset=["Change %"])
+                    
+                    st.dataframe(styled_table, use_container_width=True, height=500)
+                else:
+                    st.info("No data available for the selected criteria.")
+
     # ---- Facility Report tab ----
     with tab_facility:
         # Intentionally no placeholder text (per preference)
@@ -1130,4 +1495,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
