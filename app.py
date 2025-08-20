@@ -1,9 +1,10 @@
-# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored)
+# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, PDF Reports)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
 # - Comma-separated numeric formatting (with decimals where needed)
 # - Plotly toolbars hidden
 # - Colored tabs via CSS (no Streamlit tab code changes needed)
 # - Exchange Rates functionality restored
+# - Monthly PDF Report generation
 
 import io
 import time
@@ -25,14 +26,11 @@ from urllib3.util.retry import Retry
 # PDF generation imports
 try:
     from reportlab.lib.pagesizes import letter, A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch, cm
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
-    from reportlab.graphics.shapes import Drawing
-    from reportlab.graphics.charts.linecharts import HorizontalLineChart
-    from reportlab.graphics.charts.barcharts import VerticalBarChart
     from reportlab.lib.colors import HexColor
     REPORTLAB_AVAILABLE = True
 except ImportError:
@@ -190,6 +188,7 @@ def create_session() -> requests.Session:
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     return session
+
 http_session = create_session()
 
 # ----------------------------
@@ -228,31 +227,40 @@ def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
 # Helpers
 # ----------------------------
 def _to_number(x) -> float:
-    if pd.isna(x) or x == '': return np.nan
+    if pd.isna(x) or x == '': 
+        return np.nan
     s = str(x).strip().replace(",", "")
     neg = s.startswith("(") and s.endswith(")")
-    if neg: s = s[1:-1]
-    if s.endswith("%"): s = s[:-1]
+    if neg: 
+        s = s[1:-1]
+    if s.endswith("%"): 
+        s = s[:-1]
     try:
-        num = float(s);  num = -num if neg else num
-        if abs(num) > 1e12: return np.nan
+        num = float(s)
+        num = -num if neg else num
+        if abs(num) > 1e12: 
+            return np.nan
         return num
     except Exception:
         return np.nan
 
 def cols_lower(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy(); out.columns = [str(c).strip().lower() for c in df.columns]; return out
+    out = df.copy()
+    out.columns = [str(c).strip().lower() for c in df.columns]
+    return out
 
 def fmt_currency(v, currency="SAR") -> str:
     try:
-        if pd.isna(v): return "N/A"
+        if pd.isna(v): 
+            return "N/A"
         return f"{currency} {float(v):,.0f}"
     except Exception:
         return str(v)
 
 def fmt_number(v, decimals: int = 0) -> str:
     try:
-        if pd.isna(v): return "N/A"
+        if pd.isna(v): 
+            return "N/A"
         return f"{float(v):,.{decimals}f}"
     except Exception:
         return str(v)
@@ -262,7 +270,8 @@ def fmt_number_only(v) -> str:
 
 def fmt_rate(v, decimals: int = 4) -> str:
     try:
-        if pd.isna(v): return "N/A"
+        if pd.isna(v): 
+            return "N/A"
         return f"{float(v):.{decimals}f}"
     except Exception:
         return str(v)
@@ -302,493 +311,6 @@ def read_csv(url: str) -> pd.DataFrame:
         return pd.read_csv(io.StringIO(content))
     except Exception:
         return pd.DataFrame()
-
-# ----------------------------
-# Display helpers
-# ----------------------------
-def display_as_list(df, bank_col="bank", amount_col="balance", title="Bank Balances"):
-    st.markdown(f"<span class='section-chip'>{title}</span>", unsafe_allow_html=True)
-    for _, row in df.iterrows():
-        color = THEME['amount_color']['neg'] if pd.notna(row[amount_col]) and row[amount_col] < 0 else THEME['amount_color']['pos']
-        st.markdown(
-            f"""
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #e2e8f0;">
-                <span style="font-weight:700; color:#1e293b;">{row[bank_col]}</span>
-                <span style="font-weight:800; color:{color};">{fmt_currency(row[amount_col])}</span>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-def display_as_mini_cards(df, bank_col="bank", amount_col="balance", pad="20px", radius="12px", shadow="0 2px 8px rgba(0,0,0,0.1)"):
-    cols = st.columns(3)
-    for i, row in df.iterrows():
-        with cols[int(i) % 3]:
-            st.markdown(
-                f"""
-                <div class="dash-card" style="background:{THEME['heading_bg']};padding:{pad};border-radius:{radius};border-left:4px solid {THEME['accent1']};margin-bottom:12px;box-shadow:{shadow};">
-                    <div style="font-size:12px;color:#0f172a;font-weight:700;margin-bottom:8px;">{row[bank_col]}</div>
-                    <div style="font-size:18px;font-weight:800;color:#0f172a;text-align:right;">{fmt_currency(row[amount_col])}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-def display_as_progress_bars(df, bank_col="bank", amount_col="balance"):
-    max_amount = df[amount_col].max()
-    for _, row in df.iterrows():
-        percentage = (row[amount_col] / max_amount) * 100 if max_amount > 0 else 0
-        st.markdown(
-            f"""
-            <div style="margin-bottom:16px;">
-                <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
-                    <span><strong>{row[bank_col]}</strong></span>
-                    <span><strong>{fmt_currency(row[amount_col])}</strong></span>
-                </div>
-                <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
-                    <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-def display_as_metrics(df, bank_col="bank", amount_col="balance"):
-    cols = st.columns(min(4, len(df)))
-    for i, row in df.iterrows():
-        if i < 4:
-            with cols[i]:
-                amount = row[amount_col]
-                display_amount = f"{amount/1_000_000:.1f}M" if amount >= 1_000_000 else (f"{amount/1_000:.0f}K" if amount >= 1_000 else f"{amount:.0f}")
-                st.markdown(
-                    f"""
-                    <div class="dash-card" style="text-align:center;padding:20px;background:{THEME['heading_bg']};border-radius:12px;border:2px solid {THEME['accent1']};margin-bottom:12px;">
-                        <div style="font-size:12px;color:#334155;font-weight:700;margin-bottom:8px;">{row[bank_col]}</div>
-                        <div style="font-size:20px;font-weight:900;color:#334155;">{display_amount}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-# ----------------------------
-# Parsers
-# ----------------------------
-def validate_dataframe(df: pd.DataFrame, required_cols: list, sheet_name: str) -> bool:
-    if df.empty:
-        st.warning(f"📊 {sheet_name}: No data available"); return False
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        st.warning(f"📊 {sheet_name}: Missing required columns: {missing_cols}"); return False
-    if len(df) < 1:
-        st.warning(f"📊 {sheet_name}: Insufficient data rows"); return False
-    return True
-
-def _find_after_settlement_col(columns: pd.Index, df: Optional[pd.DataFrame] = None) -> Optional[str]:
-    for col in columns:
-        c = str(col).strip().lower()
-        if "after" in c and ("settle" in c or "settel" in c): return col
-        if "balance after" in c and ("settle" in c or "settel" in c): return col
-    if df is not None and not df.empty:
-        try:
-            head = df.head(5).applymap(lambda x: str(x).strip().lower())
-            for col in df.columns:
-                if head[col].str.contains(r"(balance\s*)?after\s*sett(el|le)ment", regex=True, na=False).any():
-                    return col
-        except Exception:
-            pass
-    return None
-
-def _find_available_col(columns: pd.Index) -> Optional[str]:
-    for col in columns:
-        c = str(col).strip().lower()
-        if "available" in c and "balance" in c:
-            return col
-    lc = [str(c).lower() for c in columns]
-    if "amount" in lc: return "amount"
-    if "amount(sar)" in lc: return "amount(sar)"
-    if "balance" in lc: return "balance"
-    return None
-
-def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetime]]:
-    try:
-        c = cols_lower(df)
-        if "bank" in c.columns:
-            avail_col = _find_available_col(c.columns)
-            after_col = _find_after_settlement_col(c.columns, c)
-            if avail_col:
-                out = pd.DataFrame({
-                    "bank": c["bank"].astype(str).str.strip(),
-                    "balance": c[avail_col].map(_to_number)
-                })
-                if after_col:
-                    out["after_settlement"] = c[after_col].map(_to_number)
-                out = out.dropna(subset=["bank"])
-                if validate_dataframe(out, ["bank", "balance"], "Bank Balance"):
-                    agg = {"balance": "sum"}
-                    if "after_settlement" in out.columns:
-                        agg["after_settlement"] = "sum"
-                    by_bank = out.groupby("bank", as_index=False).agg(agg)
-                    return by_bank, datetime.now()
-
-        raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
-        bank_col = None
-        for col in raw.columns:
-            if raw[col].dtype == object:
-                non_empty = (raw[col].dropna().astype(str).str.strip() != "").sum()
-                if non_empty >= 3:
-                    bank_col = col; break
-        if bank_col is None: raise ValueError("Could not detect bank column")
-
-        parsed = pd.to_datetime(pd.Index(raw.columns), errors="coerce", dayfirst=False)
-        date_cols = [col for col, d in zip(raw.columns, parsed) if pd.notna(d)]
-        if not date_cols: raise ValueError("No valid date columns found")
-        date_map = {col: pd.to_datetime(col, errors="coerce", dayfirst=False) for col in date_cols}
-        latest_col = max(date_cols, key=lambda c_: date_map[c_])
-
-        after_col = _find_after_settlement_col(raw.columns, raw)
-        s = raw[bank_col].astype(str).str.strip()
-        mask = s.ne("") & ~s.str.contains("available|total", case=False, na=False)
-
-        keep_cols = [bank_col, latest_col] + ([after_col] if after_col else [])
-        sub = raw.loc[mask, keep_cols].copy()
-        rename_map = {bank_col: "bank", latest_col: "balance"}
-        if after_col: rename_map[after_col] = "after_settlement"
-        sub = sub.rename(columns=rename_map)
-
-        sub["balance"] = sub["balance"].astype(str).str.replace(",", "", regex=False).map(_to_number)
-        sub["bank"] = sub["bank"].str.replace(r"\s*-\s*.*$", "", regex=True).str.strip()
-        if after_col:
-            sub["after_settlement"] = sub["after_settlement"].astype(str).str.replace(",", "", regex=False).map(_to_number)
-
-        latest_date = date_map[latest_col]
-        agg = {"balance": "sum"}
-        if after_col: agg["after_settlement"] = "sum"
-        by_bank = sub.dropna(subset=["bank"]).groupby("bank", as_index=False).agg(agg)
-        if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
-            return by_bank, latest_date
-    except Exception:
-        pass
-    return pd.DataFrame(), None
-
-def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
-    try:
-        d = cols_lower(df).rename(
-            columns={"supplier name": "supplier",
-                     "amount(sar)": "amount_sar",
-                     "order/sh/branch": "order_branch"}
-        )
-        if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
-            return pd.DataFrame()
-
-        amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
-        if not amt_col: return pd.DataFrame()
-
-        out = pd.DataFrame({
-            "bank": d["bank"].astype(str).str.strip(),
-            "supplier": d.get("supplier", ""),
-            "currency": d.get("currency", ""),
-            "amount": d[amt_col].map(_to_number),
-            "status": d["status"].astype(str).str.strip().str.title()
-        })
-        out = out.dropna(subset=["amount"])
-        out = out[out["bank"].ne("")]
-        return out
-    except Exception:
-        return pd.DataFrame()
-
-def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
-    try:
-        d = cols_lower(df)
-
-        bank_col = next((c for c in d.columns if "bank" in c), None)
-        date_col = next((c for c in d.columns if "settlement" in c and "date" in c), None) or \
-                   next((c for c in d.columns if "maturity" in c and "new" not in c), None) or \
-                   next((c for c in d.columns if "due" in c and "date" in c), None) or \
-                   next((c for c in d.columns if c.strip().lower() == "date"), None)
-
-        amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
-                     next((c for c in d.columns if "currently" in c and "due" in c), None) or \
-                     next((c for c in d.columns if "balance" in c and "settlement" in c), None) or \
-                     next((c for c in ["amount(sar)", "amount", "value"] if c in d.columns), None)
-
-        status_col = next((c for c in d.columns if "status" in c), None)
-        type_col   = next((c for c in d.columns if "type" in c), None)
-        remark_col = next((c for c in d.columns if "remark" in c), None)
-        ref_col    = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
-
-        if not all([bank_col, date_col, amount_col]):
-            return pd.DataFrame()
-
-        out = pd.DataFrame({
-            "reference": d[ref_col].astype(str).str.strip() if ref_col else "",
-            "bank": d[bank_col].astype(str).str.strip(),
-            "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
-            "amount": d[amount_col].map(_to_number),
-            "status": d[status_col].astype(str).str.strip() if status_col else None,
-            "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
-            "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
-            "description": ""
-        })
-
-        out = out.dropna(subset=["bank", "amount", "settlement_date"])
-
-        if status_col:
-            has_pending = out["status"].str.contains("pending", case=False, na=False).any()
-            if has_pending:
-                out = out[out["status"].str.contains("pending", case=False, na=False)]
-
-        return out.reset_index(drop=True)
-    except Exception:
-        return pd.DataFrame()
-
-def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
-    try:
-        d = cols_lower(df)
-        if "date" not in d.columns: return pd.DataFrame()
-        liq_col = next((c for c in d.columns if ("total" in c and "liquidity" in c)), None)
-        if not liq_col: return pd.DataFrame()
-        out = pd.DataFrame({
-            "date": pd.to_datetime(d["date"], errors="coerce"),
-            "total_liquidity": d[liq_col].map(_to_number)
-        }).dropna()
-        return out.sort_values("date")
-    except Exception:
-        return pd.DataFrame()
-
-def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
-    try:
-        d = cols_lower(df).rename(columns={"branch":"branch", "collection":"collection", "payments":"payments"})
-        required = ["branch", "collection", "payments"]
-        if not validate_dataframe(d, required, "Collection vs Payments by Branch"): return pd.DataFrame()
-        out = pd.DataFrame({
-            "branch": d["branch"].astype(str).str.strip(),
-            "collection": d["collection"].map(_to_number).fillna(0.0),
-            "payments": d["payments"].map(_to_number).fillna(0.0)
-        })
-        out = out[out["branch"].ne("")].copy()
-        out["net"] = out["collection"] - out["payments"]
-        return out
-    except Exception:
-        return pd.DataFrame()
-
-def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse exchange rates data from the spreadsheet"""
-    try:
-        if df.empty:
-            return pd.DataFrame()
-            
-        d = cols_lower(df)
-        
-        # Find date column
-        date_col = None
-        for col in d.columns:
-            if any(term in col for term in ["date", "time", "updated"]):
-                date_col = col
-                break
-        
-        if not date_col:
-            return pd.DataFrame()
-            
-        # Look for currency columns (USD, EUR, AED, QAR, etc.)
-        currency_cols = []
-        for col in d.columns:
-            if col != date_col and col.upper() in ['USD', 'EUR', 'AED', 'QAR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD']:
-                currency_cols.append(col)
-        
-        if not currency_cols:
-            # Fallback: try to detect numeric columns that might be currencies
-            for col in d.columns:
-                if col != date_col and len(col) <= 4 and col.upper() == col:
-                    # Check if column has numeric data
-                    sample_vals = d[col].dropna().head(5)
-                    if not sample_vals.empty:
-                        numeric_count = sum(1 for val in sample_vals if pd.notna(_to_number(val)))
-                        if numeric_count >= len(sample_vals) * 0.8:  # 80% numeric
-                            currency_cols.append(col)
-        
-        if not currency_cols:
-            return pd.DataFrame()
-        
-        # Convert to long format
-        result_rows = []
-        
-        for _, row in d.iterrows():
-            date_val = pd.to_datetime(row[date_col], errors="coerce")
-            if pd.isna(date_val):
-                continue
-                
-            for curr_col in currency_cols:
-                rate_val = _to_number(row[curr_col])
-                if pd.notna(rate_val) and rate_val > 0:
-                    currency_pair = f"{curr_col.upper()}/SAR"  # Assuming SAR as base
-                    result_rows.append({
-                        "currency_pair": currency_pair,
-                        "rate": rate_val,
-                        "date": date_val
-                    })
-        
-        if not result_rows:
-            return pd.DataFrame()
-            
-        out = pd.DataFrame(result_rows)
-        
-        # Add change calculation if we have historical data
-        if len(out) > 1:
-            out = out.sort_values(["currency_pair", "date"])
-            out["prev_rate"] = out.groupby("currency_pair")["rate"].shift(1)
-            out["change"] = out["rate"] - out["prev_rate"] 
-            out["change_pct"] = (out["change"] / out["prev_rate"]) * 100
-        
-        return out.reset_index(drop=True)
-    except Exception as e:
-        logger.error(f"Error parsing exchange rates: {e}")
-        return pd.DataFrame()
-
-# ----------------------------
-# PDF Report Generation
-# ----------------------------
-def generate_monthly_pdf_report(month_start, month_end, df_by_bank, df_lc, df_pay_approved, 
-                                df_fm, df_fx, df_cvp, balance_due_value, total_balance, 
-                                approved_sum, lc_next4_sum) -> bytes:
-    """Generate comprehensive monthly PDF report"""
-    if not REPORTLAB_AVAILABLE:
-        raise ImportError("ReportLab is required for PDF generation. Install with: pip install reportlab")
-    
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, 
-                           topMargin=2*cm, bottomMargin=2*cm)
-    
-    # Styles
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        spaceAfter=30,
-        alignment=TA_CENTER,
-        textColor=HexColor('#1f2937'),
-        fontName='Helvetica-Bold'
-    )
-    
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading2'],
-        fontSize=16,
-        spaceAfter=12,
-        spaceBefore=20,
-        textColor=HexColor('#3b5bfd'),
-        fontName='Helvetica-Bold'
-    )
-    
-    subheading_style = ParagraphStyle(
-        'CustomSubHeading',
-        parent=styles['Heading3'],
-        fontSize=12,
-        spaceAfter=8,
-        spaceBefore=12,
-        textColor=HexColor('#374151'),
-        fontName='Helvetica-Bold'
-    )
-    
-    body_style = ParagraphStyle(
-        'CustomBody',
-        parent=styles['Normal'],
-        fontSize=10,
-        spaceAfter=6,
-        alignment=TA_JUSTIFY,
-        fontName='Helvetica'
-    )
-    
-    # Story (content) list
-    story = []
-    
-    # Cover Page
-    story.append(Spacer(1, 2*inch))
-    story.append(Paragraph(config.COMPANY_NAME.upper(), title_style))
-    story.append(Spacer(1, 0.5*inch))
-    story.append(Paragraph("TREASURY MONTHLY REPORT", title_style))
-    story.append(Spacer(1, 0.3*inch))
-    
-    period_text = f"Period: {month_start.strftime('%B %Y')}"
-    story.append(Paragraph(period_text, heading_style))
-    story.append(Spacer(1, 0.3*inch))
-    
-    generated_text = f"Generated on: {datetime.now().strftime('%B %d, %Y at %H:%M')}"
-    story.append(Paragraph(generated_text, body_style))
-    story.append(Spacer(1, 2*inch))
-    
-    # Executive Summary Box
-    exec_summary_data = [
-        ['EXECUTIVE SUMMARY', ''],
-        ['Total Available Balance', f'SAR {total_balance:,.0f}'],
-        ['Approved Payments', f'SAR {approved_sum:,.0f}'],
-        ['LC Due (Next 4 Days)', f'SAR {lc_next4_sum:,.0f}'],
-        ['Active Banks', f'{len(df_by_bank) if not df_by_bank.empty else 0}'],
-        ['Balance Due (Month)', f'SAR {balance_due_value:,.0f}' if pd.notna(balance_due_value) else 'N/A'],
-    ]
-    
-    exec_table = Table(exec_summary_data, colWidths=[3*inch, 2*inch])
-    exec_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (1, 0), HexColor('#3b5bfd')),
-        ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('FONTSIZE', (0, 1), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f8fafc')),
-        ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0'))
-    ]))
-    story.append(exec_table)
-    
-    story.append(PageBreak())
-    
-    # Content sections
-    story.append(Paragraph("1. TREASURY SUMMARY", heading_style))
-    summary_text = f"This report covers treasury operations for {month_start.strftime('%B %Y')}."
-    story.append(Paragraph(summary_text, body_style))
-    
-    # Build PDF
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
-
-def create_download_link(val, filename):
-    """Generate download link for PDF"""
-    b64 = base64.b64encode(val).decode()
-    return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">Download PDF Report</a>'
-
-def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
-    if df_raw.empty:
-        return np.nan
-    try:
-        d = df_raw.copy()
-        mask = d.applymap(lambda x: isinstance(x, str) and ("balance due" in x.strip().lower()))
-        if mask.any().any():
-            coords = np.argwhere(mask.values)
-            r, c = coords[0]
-            row_vals = d.iloc[r].apply(_to_number)
-            after = row_vals.iloc[c+1:]
-            cand = after[after.notna()]
-            if not cand.empty:
-                return float(cand.iloc[0])
-            row_nums = row_vals[row_vals.notna()]
-            if not row_nums.empty:
-                return float(row_nums.iloc[-1])
-        col = next((col for col in d.columns if isinstance(col, str) and "balance due" in col.strip().lower()), None)
-        if col:
-            series = d[col].apply(_to_number).dropna()
-            if not series.empty:
-                return float(series.iloc[-1])
-        for _, row in d.iterrows():
-            if any(isinstance(v, str) and "balance due" in v.lower() for v in row):
-                nums = [ _to_number(v) for v in row ]
-                nums = [x for x in nums if not pd.isna(x)]
-                if nums:
-                    return float(nums[-1])
-    except Exception:
-        pass
-    return np.nan
 
 # ----------------------------
 # PDF Report Generation
@@ -937,6 +459,365 @@ def generate_monthly_pdf_report(month_start, month_end, df_by_bank, df_lc, df_pa
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
+
+# ----------------------------
+# Display helpers
+# ----------------------------
+def display_as_list(df, bank_col="bank", amount_col="balance", title="Bank Balances"):
+    st.markdown(f"<span class='section-chip'>{title}</span>", unsafe_allow_html=True)
+    for _, row in df.iterrows():
+        color = THEME['amount_color']['neg'] if pd.notna(row[amount_col]) and row[amount_col] < 0 else THEME['amount_color']['pos']
+        st.markdown(
+            f"""
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #e2e8f0;">
+                <span style="font-weight:700; color:#1e293b;">{row[bank_col]}</span>
+                <span style="font-weight:800; color:{color};">{fmt_currency(row[amount_col])}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+def display_as_mini_cards(df, bank_col="bank", amount_col="balance", pad="20px", radius="12px", shadow="0 2px 8px rgba(0,0,0,0.1)"):
+    cols = st.columns(3)
+    for i, row in df.iterrows():
+        with cols[int(i) % 3]:
+            st.markdown(
+                f"""
+                <div class="dash-card" style="background:{THEME['heading_bg']};padding:{pad};border-radius:{radius};border-left:4px solid {THEME['accent1']};margin-bottom:12px;box-shadow:{shadow};">
+                    <div style="font-size:12px;color:#0f172a;font-weight:700;margin-bottom:8px;">{row[bank_col]}</div>
+                    <div style="font-size:18px;font-weight:800;color:#0f172a;text-align:right;">{fmt_currency(row[amount_col])}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+def display_as_progress_bars(df, bank_col="bank", amount_col="balance"):
+    max_amount = df[amount_col].max()
+    for _, row in df.iterrows():
+        percentage = (row[amount_col] / max_amount) * 100 if max_amount > 0 else 0
+        st.markdown(
+            f"""
+            <div style="margin-bottom:16px;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
+                    <span><strong>{row[bank_col]}</strong></span>
+                    <span><strong>{fmt_currency(row[amount_col])}</strong></span>
+                </div>
+                <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
+                    <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+def display_as_metrics(df, bank_col="bank", amount_col="balance"):
+    cols = st.columns(min(4, len(df)))
+    for i, row in df.iterrows():
+        if i < 4:
+            with cols[i]:
+                amount = row[amount_col]
+                display_amount = f"{amount/1_000_000:.1f}M" if amount >= 1_000_000 else (f"{amount/1_000:.0f}K" if amount >= 1_000 else f"{amount:.0f}")
+                st.markdown(
+                    f"""
+                    <div class="dash-card" style="text-align:center;padding:20px;background:{THEME['heading_bg']};border-radius:12px;border:2px solid {THEME['accent1']};margin-bottom:12px;">
+                        <div style="font-size:12px;color:#334155;font-weight:700;margin-bottom:8px;">{row[bank_col]}</div>
+                        <div style="font-size:20px;font-weight:900;color:#334155;">{display_amount}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+# ----------------------------
+# Parsers
+# ----------------------------
+def validate_dataframe(df: pd.DataFrame, required_cols: list, sheet_name: str) -> bool:
+    if df.empty:
+        st.warning(f"📊 {sheet_name}: No data available")
+        return False
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        st.warning(f"📊 {sheet_name}: Missing required columns: {missing_cols}")
+        return False
+    if len(df) < 1:
+        st.warning(f"📊 {sheet_name}: Insufficient data rows")
+        return False
+    return True
+
+def _find_after_settlement_col(columns: pd.Index, df: Optional[pd.DataFrame] = None) -> Optional[str]:
+    for col in columns:
+        c = str(col).strip().lower()
+        if "after" in c and ("settle" in c or "settel" in c): 
+            return col
+        if "balance after" in c and ("settle" in c or "settel" in c): 
+            return col
+    if df is not None and not df.empty:
+        try:
+            head = df.head(5).applymap(lambda x: str(x).strip().lower())
+            for col in df.columns:
+                if head[col].str.contains(r"(balance\s*)?after\s*sett(el|le)ment", regex=True, na=False).any():
+                    return col
+        except Exception:
+            pass
+    return None
+
+def _find_available_col(columns: pd.Index) -> Optional[str]:
+    for col in columns:
+        c = str(col).strip().lower()
+        if "available" in c and "balance" in c:
+            return col
+    lc = [str(c).lower() for c in columns]
+    if "amount" in lc: 
+        return "amount"
+    if "amount(sar)" in lc: 
+        return "amount(sar)"
+    if "balance" in lc: 
+        return "balance"
+    return None
+
+def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetime]]:
+    try:
+        c = cols_lower(df)
+        if "bank" in c.columns:
+            avail_col = _find_available_col(c.columns)
+            after_col = _find_after_settlement_col(c.columns, c)
+            if avail_col:
+                out = pd.DataFrame({
+                    "bank": c["bank"].astype(str).str.strip(),
+                    "balance": c[avail_col].map(_to_number)
+                })
+                if after_col:
+                    out["after_settlement"] = c[after_col].map(_to_number)
+                out = out.dropna(subset=["bank"])
+                if validate_dataframe(out, ["bank", "balance"], "Bank Balance"):
+                    agg = {"balance": "sum"}
+                    if "after_settlement" in out.columns:
+                        agg["after_settlement"] = "sum"
+                    by_bank = out.groupby("bank", as_index=False).agg(agg)
+                    return by_bank, datetime.now()
+
+        raw = df.copy().dropna(how="all").dropna(axis=1, how="all")
+        bank_col = None
+        for col in raw.columns:
+            if raw[col].dtype == object:
+                non_empty = (raw[col].dropna().astype(str).str.strip() != "").sum()
+                if non_empty >= 3:
+                    bank_col = col
+                    break
+        if bank_col is None: 
+            raise ValueError("Could not detect bank column")
+
+        parsed = pd.to_datetime(pd.Index(raw.columns), errors="coerce", dayfirst=False)
+        date_cols = [col for col, d in zip(raw.columns, parsed) if pd.notna(d)]
+        if not date_cols: 
+            raise ValueError("No valid date columns found")
+        date_map = {col: pd.to_datetime(col, errors="coerce", dayfirst=False) for col in date_cols}
+        latest_col = max(date_cols, key=lambda c_: date_map[c_])
+
+        after_col = _find_after_settlement_col(raw.columns, raw)
+        s = raw[bank_col].astype(str).str.strip()
+        mask = s.ne("") & ~s.str.contains("available|total", case=False, na=False)
+
+        keep_cols = [bank_col, latest_col] + ([after_col] if after_col else [])
+        sub = raw.loc[mask, keep_cols].copy()
+        rename_map = {bank_col: "bank", latest_col: "balance"}
+        if after_col: 
+            rename_map[after_col] = "after_settlement"
+        sub = sub.rename(columns=rename_map)
+
+        sub["balance"] = sub["balance"].astype(str).str.replace(",", "", regex=False).map(_to_number)
+        sub["bank"] = sub["bank"].str.replace(r"\s*-\s*.*$", "", regex=True).str.strip()
+        if after_col:
+            sub["after_settlement"] = sub["after_settlement"].astype(str).str.replace(",", "", regex=False).map(_to_number)
+
+        latest_date = date_map[latest_col]
+        agg = {"balance": "sum"}
+        if after_col: 
+            agg["after_settlement"] = "sum"
+        by_bank = sub.dropna(subset=["bank"]).groupby("bank", as_index=False).agg(agg)
+        if validate_dataframe(by_bank, ["bank", "balance"], "Bank Balance"):
+            return by_bank, latest_date
+    except Exception:
+        pass
+    return pd.DataFrame(), None
+
+def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
+    try:
+        d = cols_lower(df).rename(
+            columns={"supplier name": "supplier",
+                     "amount(sar)": "amount_sar",
+                     "order/sh/branch": "order_branch"}
+        )
+        if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
+            return pd.DataFrame()
+
+        amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
+        if not amt_col: 
+            return pd.DataFrame()
+
+        out = pd.DataFrame({
+            "bank": d["bank"].astype(str).str.strip(),
+            "supplier": d.get("supplier", ""),
+            "currency": d.get("currency", ""),
+            "amount": d[amt_col].map(_to_number),
+            "status": d["status"].astype(str).str.strip().str.title()
+        })
+        out = out.dropna(subset=["amount"])
+        out = out[out["bank"].ne("")]
+        return out
+    except Exception:
+        return pd.DataFrame()
+
+def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
+    try:
+        d = cols_lower(df)
+
+        bank_col = next((c for c in d.columns if "bank" in c), None)
+        date_col = next((c for c in d.columns if "settlement" in c and "date" in c), None) or \
+                   next((c for c in d.columns if "maturity" in c and "new" not in c), None) or \
+                   next((c for c in d.columns if "due" in c and "date" in c), None) or \
+                   next((c for c in d.columns if c.strip().lower() == "date"), None)
+
+        amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
+                     next((c for c in d.columns if "currently" in c and "due" in c), None) or \
+                     next((c for c in d.columns if "balance" in c and "settlement" in c), None) or \
+                     next((c for c in ["amount(sar)", "amount", "value"] if c in d.columns), None)
+
+        status_col = next((c for c in d.columns if "status" in c), None)
+        type_col   = next((c for c in d.columns if "type" in c), None)
+        remark_col = next((c for c in d.columns if "remark" in c), None)
+        ref_col    = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
+
+        if not all([bank_col, date_col, amount_col]):
+            return pd.DataFrame()
+
+        out = pd.DataFrame({
+            "reference": d[ref_col].astype(str).str.strip() if ref_col else "",
+            "bank": d[bank_col].astype(str).str.strip(),
+            "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
+            "amount": d[amount_col].map(_to_number),
+            "status": d[status_col].astype(str).str.strip() if status_col else None,
+            "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
+            "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
+            "description": ""
+        })
+
+        out = out.dropna(subset=["bank", "amount", "settlement_date"])
+
+        if status_col:
+            has_pending = out["status"].str.contains("pending", case=False, na=False).any()
+            if has_pending:
+                out = out[out["status"].str.contains("pending", case=False, na=False)]
+
+        return out.reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
+    try:
+        d = cols_lower(df)
+        if "date" not in d.columns: 
+            return pd.DataFrame()
+        liq_col = next((c for c in d.columns if ("total" in c and "liquidity" in c)), None)
+        if not liq_col: 
+            return pd.DataFrame()
+        out = pd.DataFrame({
+            "date": pd.to_datetime(d["date"], errors="coerce"),
+            "total_liquidity": d[liq_col].map(_to_number)
+        }).dropna()
+        return out.sort_values("date")
+    except Exception:
+        return pd.DataFrame()
+
+def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
+    try:
+        d = cols_lower(df).rename(columns={"branch":"branch", "collection":"collection", "payments":"payments"})
+        required = ["branch", "collection", "payments"]
+        if not validate_dataframe(d, required, "Collection vs Payments by Branch"): 
+            return pd.DataFrame()
+        out = pd.DataFrame({
+            "branch": d["branch"].astype(str).str.strip(),
+            "collection": d["collection"].map(_to_number).fillna(0.0),
+            "payments": d["payments"].map(_to_number).fillna(0.0)
+        })
+        out = out[out["branch"].ne("")].copy()
+        out["net"] = out["collection"] - out["payments"]
+        return out
+    except Exception:
+        return pd.DataFrame()
+
+def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
+    """Parse exchange rates data from the spreadsheet"""
+    try:
+        if df.empty:
+            return pd.DataFrame()
+            
+        d = cols_lower(df)
+        
+        # Find date column
+        date_col = None
+        for col in d.columns:
+            if any(term in col for term in ["date", "time", "updated"]):
+                date_col = col
+                break
+        
+        if not date_col:
+            return pd.DataFrame()
+            
+        # Look for currency columns (USD, EUR, AED, QAR, etc.)
+        currency_cols = []
+        for col in d.columns:
+            if col != date_col and col.upper() in ['USD', 'EUR', 'AED', 'QAR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD']:
+                currency_cols.append(col)
+        
+        if not currency_cols:
+            # Fallback: try to detect numeric columns that might be currencies
+            for col in d.columns:
+                if col != date_col and len(col) <= 4 and col.upper() == col:
+                    # Check if column has numeric data
+                    sample_vals = d[col].dropna().head(5)
+                    if not sample_vals.empty:
+                        numeric_count = sum(1 for val in sample_vals if pd.notna(_to_number(val)))
+                        if numeric_count >= len(sample_vals) * 0.8:  # 80% numeric
+                            currency_cols.append(col)
+        
+        if not currency_cols:
+            return pd.DataFrame()
+        
+        # Convert to long format
+        result_rows = []
+        
+        for _, row in d.iterrows():
+            date_val = pd.to_datetime(row[date_col], errors="coerce")
+            if pd.isna(date_val):
+                continue
+                
+            for curr_col in currency_cols:
+                rate_val = _to_number(row[curr_col])
+                if pd.notna(rate_val) and rate_val > 0:
+                    currency_pair = f"{curr_col.upper()}/SAR"  # Assuming SAR as base
+                    result_rows.append({
+                        "currency_pair": currency_pair,
+                        "rate": rate_val,
+                        "date": date_val
+                    })
+        
+        if not result_rows:
+            return pd.DataFrame()
+            
+        out = pd.DataFrame(result_rows)
+        
+        # Add change calculation if we have historical data
+        if len(out) > 1:
+            out = out.sort_values(["currency_pair", "date"])
+            out["prev_rate"] = out.groupby("currency_pair")["rate"].shift(1)
+            out["change"] = out["rate"] - out["prev_rate"] 
+            out["change_pct"] = (out["change"] / out["prev_rate"]) * 100
+        
+        return out.reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
     if df_raw.empty:
         return np.nan
     try:
@@ -965,6 +846,9 @@ def generate_monthly_pdf_report(month_start, month_end, df_by_bank, df_lc, df_pa
                 if nums:
                     return float(nums[-1])
     except Exception:
+        pass
+    return np.nan
+
 # ----------------------------
 # Header
 # ----------------------------
@@ -973,73 +857,10 @@ def render_header():
     st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
     c_logo, c_title = st.columns([0.08, 0.92])
     with c_logo:
-        try: st.image(config.LOGO_PATH, width=44)
-        except Exception: st.markdown("💰", help="Logo not found")
-    with c_title:
-        name = config.COMPANY_NAME.upper()
-        st.markdown(f"<h1 style='margin:0; font-weight:900; color:#1f2937;'>{name}</h1>", unsafe_allow_html=True)
-        st.caption(f"Enhanced Treasury Dashboard — Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-# ----------------------------
-# Sidebar
-# ----------------------------
-def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=True):
-    with st.sidebar:
-        st.markdown("### 🔄 Refresh")
-        if st.button("Refresh Now", type="primary", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
-        # FX toggle restored
-        if show_fx:
-            st.markdown("### 💱 Exchange Rates")
-            fx_enabled = st.toggle("Show FX Data", 
-                                 value=st.session_state.get("show_fx", True),
-                                 help="Toggle exchange rate information")
-            st.session_state["show_fx"] = fx_enabled
-
-        st.markdown("### 📊 Key Metrics")
-        def _kpi(title, value, bg, border, color):
-            st.markdown(
-                f"""
-                <div style="background:{bg};border:1px solid {border};border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 6px rgba(0,0,0,.04);">
-                    <div style="font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{title}</div>
-                    <div style="font-size:20px;font-weight:800;color:{color};text-align:right;">{(f"{float(value):,.0f}" if value else "N/A")}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        _kpi("TOTAL BALANCE", total_balance, THEME["heading_bg"], THEME["accent1"], "#1E3A8A")
-        _kpi("APPROVED PAYMENTS", approved_sum, THEME["heading_bg"], THEME["accent2"], "#065F46")
-        _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, THEME["heading_bg"], THEME["accent1"], "#92400E")
-        _kpi("ACTIVE BANKS", banks_cnt, THEME["heading_bg"], THEME["accent2"], "#9F1239")
-
-        st.markdown("---")
-        st.markdown("### ⚙️ Controls")
-        do_auto = st.toggle("Auto refresh",
-                            value=st.session_state.get("auto_refresh", False),
-                            help="Automatically refresh the dashboard.")
-        every_sec = st.number_input("Every (seconds)", min_value=15, max_value=900,
-                                    value=int(st.session_state.get("auto_interval", 120)), step=15)
-        st.session_state["auto_refresh"] = bool(do_auto)
-        st.session_state["auto_interval"] = int(every_sec)
-
-        st.markdown("### 🎨 Theme")
-        sel = st.selectbox("Palette", list(PALETTES.keys()),
-                           index=list(PALETTES.keys()).index(st.session_state["palette_name"]))
-        if sel != st.session_state["palette_name"]:
-            st.session_state["palette_name"] = sel
-            st.rerun()
-
-        density = st.toggle("Compact density", value=st.session_state.get("compact_density", False))
-        st.session_state["compact_density"] = density
-def render_header():
-    st.markdown('<div class="top-gradient"></div>', unsafe_allow_html=True)
-    st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-    c_logo, c_title = st.columns([0.08, 0.92])
-    with c_logo:
-        try: st.image(config.LOGO_PATH, width=44)
-        except Exception: st.markdown("💰", help="Logo not found")
+        try: 
+            st.image(config.LOGO_PATH, width=44)
+        except Exception: 
+            st.markdown("💰", help="Logo not found")
     with c_title:
         name = config.COMPANY_NAME.upper()
         st.markdown(f"<h1 style='margin:0; font-weight:900; color:#1f2937;'>{name}</h1>", unsafe_allow_html=True)
@@ -1159,14 +980,16 @@ def main():
     if not df_by_bank.empty:
         neg_rows = df_by_bank[df_by_bank["balance"] < 0].copy()
         if not neg_rows.empty:
-            cnt = len(neg_rows); total_neg = neg_rows["balance"].sum()
+            cnt = len(neg_rows)
+            total_neg = neg_rows["balance"].sum()
             names = ", ".join(neg_rows.sort_values("balance")["bank"].tolist())
             insights.append({"type": "error","title": "Banks with Negative Balance",
                              "content": f"{cnt} bank(s) show negative available balance (total {fmt_number_only(total_neg)}). Affected: {names}."})
         if "after_settlement" in df_by_bank.columns:
             neg_after = df_by_bank[df_by_bank["after_settlement"] < 0].copy()
             if not neg_after.empty:
-                cnt2 = len(neg_after); total_neg2 = neg_after["after_settlement"].sum()
+                cnt2 = len(neg_after)
+                total_neg2 = neg_after["after_settlement"].sum()
                 names2 = ", ".join(neg_after.sort_values("after_settlement")["bank"].tolist())
                 insights.append({"type": "error","title": "Banks Negative After Settlement",
                                  "content": f"{cnt2} bank(s) go negative after settlement (total {fmt_number_only(total_neg2)}). Affected: {names2}."})
@@ -1187,9 +1010,12 @@ def main():
                              "content": f"Liquidity declining by {abs(recent_trend)*100:.1f}% on average over recent periods."})
     if insights:
         for ins in insights:
-            if ins["type"] == "info": st.info(f"ℹ️ **{ins['title']}**: {ins['content']}")
-            elif ins["type"] == "warning": st.warning(f"⚠️ **{ins['title']}**: {ins['content']}")
-            elif ins["type"] == "error": st.error(f"🚨 **{ins['title']}**: {ins['content']}")
+            if ins["type"] == "info": 
+                st.info(f"ℹ️ **{ins['title']}**: {ins['content']}")
+            elif ins["type"] == "warning": 
+                st.warning(f"⚠️ **{ins['title']}**: {ins['content']}")
+            elif ins["type"] == "error": 
+                st.error(f"🚨 **{ins['title']}**: {ins['content']}")
     else:
         st.info("💡 Insights will appear as data becomes available and patterns emerge.")
     st.markdown("---")
@@ -1210,20 +1036,20 @@ def main():
         month_start = today0_local.replace(day=1)
         month_end = (month_start + pd.offsets.MonthEnd(1)).normalize()
 
-        # Month Report Generation Section
+        # Monthly Report Generation Section
         st.markdown('<span class="section-chip">📄 Monthly Report Generation</span>', unsafe_allow_html=True)
         
         col_report1, col_report2, col_report3 = st.columns([2, 1, 1])
         with col_report1:
-            st.markdown("**Generate comprehensive monthly treasury report with detailed insights, analysis, and recommendations.**")
+            st.markdown("**Generate comprehensive monthly treasury report with detailed insights and analysis.**")
             st.markdown(f"📅 **Report Period:** {month_start.strftime('%B %Y')}")
-            st.markdown(f"📊 **Data Coverage:** Bank balances, LC settlements, supplier payments, FX movements, branch performance")
+            st.markdown(f"📊 **Coverage:** Bank balances, LC settlements, supplier payments, FX movements")
         
         with col_report2:
             if st.button("📄 Generate PDF Report", type="primary", use_container_width=True):
                 if REPORTLAB_AVAILABLE:
                     try:
-                        with st.spinner("Generating comprehensive monthly report..."):
+                        with st.spinner("Generating monthly report..."):
                             pdf_bytes = generate_monthly_pdf_report(
                                 month_start, month_end, df_by_bank, df_lc, df_pay_approved,
                                 df_fm, df_fx, df_cvp, balance_due_value, total_balance,
@@ -1250,11 +1076,10 @@ def main():
             st.markdown("""
             • Executive Summary
             • Bank Balance Analysis  
-            • LC Settlements
-            • Supplier Payments
+            • LC Settlements Overview
+            • Supplier Payments Summary
             • Exchange Rate Analysis
-            • Branch Performance
-            • Key Recommendations
+            • Key Financial Metrics
             """)
         
         st.markdown("---")
@@ -1305,11 +1130,15 @@ def main():
                         st.line_chart(fm_m.set_index("date")["total_liquidity"])
 
                     kpi_a, kpi_b, kpi_c, kpi_d = st.columns(4)
-                    with kpi_a: st.metric("Opening (MTD)", fmt_number_only(opening))
-                    with kpi_b: st.metric("Current", fmt_number_only(latest),
+                    with kpi_a: 
+                        st.metric("Opening (MTD)", fmt_number_only(opening))
+                    with kpi_b: 
+                        st.metric("Current", fmt_number_only(latest),
                                           delta=f"{mtd_change:,.0f} ({mtd_change_pct:.1f}%)" if pd.notna(mtd_change_pct) else None)
-                    with kpi_c: st.metric("Avg Daily Δ", fmt_number_only(avg_daily))
-                    with kpi_d: st.metric("Proj. EOM", fmt_number_only(proj_eom))
+                    with kpi_c: 
+                        st.metric("Avg Daily Δ", fmt_number_only(avg_daily))
+                    with kpi_d: 
+                        st.metric("Proj. EOM", fmt_number_only(proj_eom))
 
                     st.markdown("**Daily Dynamics (MTD)**")
                     d1, d2, d3 = st.columns(3)
@@ -1350,9 +1179,12 @@ def main():
                 lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
                 weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
                 k1, k2, k3 = st.columns(3)
-                with k1: st.metric("Current Due", fmt_number_only(lc_m["amount"].sum()))
-                with k2: st.metric("# of LCs", len(lc_m))
-                with k3: st.metric("Remaining in Month", fmt_number(balance_due_value, 2))
+                with k1: 
+                    st.metric("Current Due", fmt_number_only(lc_m["amount"].sum()))
+                with k2: 
+                    st.metric("# of LCs", len(lc_m))
+                with k3: 
+                    st.metric("Remaining in Month", fmt_number(balance_due_value, 2))
                 try:
                     import plotly.io as pio, plotly.graph_objects as go
                     if "brand" not in pio.templates:
@@ -1416,13 +1248,20 @@ def main():
                 cols = st.columns(4)
                 for i, row in df_bal_view.iterrows():
                     with cols[int(i) % 4]:
-                        bal = row.get('balance', np.nan); after = row.get('after_settlement', np.nan)
-                        if pd.notna(bal) and bal < 0: bucket = "neg"
-                        elif bal > THEME["thresholds"]["best"]: bucket = "best"
-                        elif bal > THEME["thresholds"]["good"]: bucket = "good"
-                        elif bal > THEME["thresholds"]["ok"]: bucket = "ok"
-                        else: bucket = "low"
-                        bg = THEME["card_bg"][bucket]; icon = THEME["icons"][bucket]
+                        bal = row.get('balance', np.nan)
+                        after = row.get('after_settlement', np.nan)
+                        if pd.notna(bal) and bal < 0: 
+                            bucket = "neg"
+                        elif bal > THEME["thresholds"]["best"]: 
+                            bucket = "best"
+                        elif bal > THEME["thresholds"]["good"]: 
+                            bucket = "good"
+                        elif bal > THEME["thresholds"]["ok"]: 
+                            bucket = "ok"
+                        else: 
+                            bucket = "low"
+                        bg = THEME["card_bg"][bucket]
+                        icon = THEME["icons"][bucket]
                         amt_color = THEME["amount_color"]["neg"] if pd.notna(bal) and bal < 0 else THEME["amount_color"]["pos"]
                         after_html = ""
                         if pd.notna(after):
@@ -1494,7 +1333,8 @@ def main():
                 with c2:
                     st.markdown("### 📊 Liquidity Metrics")
                     st.metric("Current", fmt_number_only(latest_liquidity))
-                    if len(df_fm) > 1: st.metric("Trend", trend_text)
+                    if len(df_fm) > 1: 
+                        st.metric("Trend", trend_text)
                     st.markdown("**Statistics (30d)**")
                     last30 = df_fm.tail(30)
                     st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
@@ -1532,8 +1372,10 @@ def main():
                 tbl = cvp_sorted.rename(columns={"branch": "Branch", "collection": "Collection", "payments": "Payments", "net": "Net"})
                 styled = style_right(tbl, num_cols=["Collection", "Payments", "Net"])
                 def _net_red(val):
-                    try: return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
-                    except Exception: return ''
+                    try: 
+                        return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
+                    except Exception: 
+                        return ''
                 styled = styled.applymap(_net_red, subset=["Net"])
                 st.dataframe(styled, use_container_width=True, height=420)
             else:
@@ -1556,9 +1398,12 @@ def main():
                                       index=0, horizontal=True, key="lc_view")
                 if lc_display == "Summary + Table":
                     cc1, cc2, cc3 = st.columns(3)
-                    with cc1: st.metric("Total LC Amount", fmt_number_only(lc_view["amount"].sum()))
-                    with cc2: st.metric("Number of LCs", len(lc_view))
-                    with cc3: st.metric("Urgent (2 days)", len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
+                    with cc1: 
+                        st.metric("Total LC Amount", fmt_number_only(lc_view["amount"].sum()))
+                    with cc2: 
+                        st.metric("Number of LCs", len(lc_view))
+                    with cc3: 
+                        st.metric("Urgent (2 days)", len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
                     viz = lc_view.copy()
                     viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
                     viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
@@ -1569,8 +1414,10 @@ def main():
                     show = viz[cols].sort_values("Settlement Date")
                     def _highlight(row):
                         if "Days Until Due" in row:
-                            if row["Days Until Due"] <= 2: return ['background-color: #fee2e2'] * len(row)
-                            if row["Days Until Due"] <= 7: return ['background-color: #fef3c7'] * len(row)
+                            if row["Days Until Due"] <= 2: 
+                                return ['background-color: #fee2e2'] * len(row)
+                            if row["Days Until Due"] <= 7: 
+                                return ['background-color: #fef3c7'] * len(row)
                         return [''] * len(row)
                     styled = style_right(show, num_cols=["Amount"]).apply(_highlight, axis=1)
                     st.dataframe(styled, use_container_width=True, height=400)
@@ -1605,7 +1452,8 @@ def main():
         st.markdown('<span class="section-chip">💰 Supplier Payments</span>', unsafe_allow_html=True)
         def render_payments_tab(df_src: pd.DataFrame, status_label: str, key_suffix: str):
             if df_src.empty:
-                st.info(f"No {status_label.lower()} payments found."); return
+                st.info(f"No {status_label.lower()} payments found.")
+                return
             col1, col2 = st.columns([2, 1])
             with col1:
                 banks = sorted(df_src["bank"].dropna().unique())
@@ -1618,9 +1466,12 @@ def main():
                                         index=0, horizontal=True, key=f"payment_view_{key_suffix}")
                 if payment_view == "Summary + Table":
                     c1, c2, c3 = st.columns(3)
-                    with c1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
-                    with c2: st.metric("Number of Payments", len(view_data))
-                    with c3: st.metric("Average Payment", fmt_number_only(view_data["amount"].mean()))
+                    with c1: 
+                        st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
+                    with c2: 
+                        st.metric("Number of Payments", len(view_data))
+                    with c3: 
+                        st.metric("Average Payment", fmt_number_only(view_data["amount"].mean()))
                     grp = (view_data.groupby("bank", as_index=False)["amount"]
                            .sum().sort_values("amount", ascending=False)
                            .rename(columns={"bank": "Bank", "amount": "Amount"}))
@@ -1643,8 +1494,10 @@ def main():
             else:
                 st.info("No payments match the selected criteria.")
         tab_approved, tab_released = st.tabs(["Approved", "Released"])
-        with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
-        with tab_released: render_payments_tab(df_pay_released, "Released", "released")
+        with tab_approved: 
+            render_payments_tab(df_pay_approved, "Approved", "approved")
+        with tab_released: 
+            render_payments_tab(df_pay_released, "Released", "released")
 
     # ---- Exchange Rates tab (restored) ----
     with tab_fx:
