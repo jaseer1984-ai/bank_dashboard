@@ -773,7 +773,7 @@ def main():
     # TABS
     # =========================
     tab_overview, tab_bank, tab_settlements, tab_payments, tab_fx, tab_facility = st.tabs(
-        ["Overview", "Bank", "Settlements", "Supplier Payments", "Exchange Rate", "Facility Report"]
+        ["Overview", "Bank", "Settlements", "Supplier Payments",  "Facility Report"]
     )
 
     # ---- Overview: Monthly detailed insights ----
@@ -1260,6 +1260,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
