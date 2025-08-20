@@ -13,6 +13,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from functools import wraps
 from typing import Optional, Tuple, Dict, Any
+import base64
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,22 @@ import requests
 import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# PDF generation imports
+try:
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch, cm
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics.charts.linecharts import HorizontalLineChart
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.lib.colors import HexColor
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
 # --- Styler type-hint compatibility (some builds miss this symbol)
 try:
@@ -627,7 +644,349 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
         logger.error(f"Error parsing exchange rates: {e}")
         return pd.DataFrame()
 
-def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
+# ----------------------------
+# PDF Report Generation
+# ----------------------------
+def generate_monthly_pdf_report(month_start, month_end, df_by_bank, df_lc, df_pay_approved, 
+                                df_fm, df_fx, df_cvp, balance_due_value, total_balance, 
+                                approved_sum, lc_next4_sum) -> bytes:
+    """Generate comprehensive monthly PDF report"""
+    if not REPORTLAB_AVAILABLE:
+        raise ImportError("ReportLab is required for PDF generation. Install with: pip install reportlab")
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, 
+                           topMargin=2*cm, bottomMargin=2*cm)
+    
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        spaceAfter=30,
+        alignment=TA_CENTER,
+        textColor=HexColor('#1f2937'),
+        fontName='Helvetica-Bold'
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        spaceAfter=12,
+        spaceBefore=20,
+        textColor=HexColor('#3b5bfd'),
+        fontName='Helvetica-Bold'
+    )
+    
+    subheading_style = ParagraphStyle(
+        'CustomSubHeading',
+        parent=styles['Heading3'],
+        fontSize=12,
+        spaceAfter=8,
+        spaceBefore=12,
+        textColor=HexColor('#374151'),
+        fontName='Helvetica-Bold'
+    )
+    
+    body_style = ParagraphStyle(
+        'CustomBody',
+        parent=styles['Normal'],
+        fontSize=10,
+        spaceAfter=6,
+        alignment=TA_JUSTIFY,
+        fontName='Helvetica'
+    )
+    
+    # Story (content) list
+    story = []
+    
+    # Cover Page
+    story.append(Spacer(1, 2*inch))
+    story.append(Paragraph(config.COMPANY_NAME.upper(), title_style))
+    story.append(Spacer(1, 0.5*inch))
+    story.append(Paragraph("TREASURY MONTHLY REPORT", title_style))
+    story.append(Spacer(1, 0.3*inch))
+    
+    period_text = f"Period: {month_start.strftime('%B %Y')}"
+    story.append(Paragraph(period_text, heading_style))
+    story.append(Spacer(1, 0.3*inch))
+    
+    generated_text = f"Generated on: {datetime.now().strftime('%B %d, %Y at %H:%M')}"
+    story.append(Paragraph(generated_text, body_style))
+    story.append(Spacer(1, 2*inch))
+    
+    # Executive Summary Box
+    exec_summary_data = [
+        ['EXECUTIVE SUMMARY', ''],
+        ['Total Available Balance', f'SAR {total_balance:,.0f}'],
+        ['Approved Payments', f'SAR {approved_sum:,.0f}'],
+        ['LC Due (Next 4 Days)', f'SAR {lc_next4_sum:,.0f}'],
+        ['Active Banks', f'{len(df_by_bank) if not df_by_bank.empty else 0}'],
+        ['Balance Due (Month)', f'SAR {balance_due_value:,.0f}' if pd.notna(balance_due_value) else 'N/A'],
+    ]
+    
+    exec_table = Table(exec_summary_data, colWidths=[3*inch, 2*inch])
+    exec_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (1, 0), HexColor('#3b5bfd')),
+        ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f8fafc')),
+        ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0'))
+    ]))
+    story.append(exec_table)
+    
+    story.append(PageBreak())
+    
+    # Content Pages
+    story.append(Paragraph("1. BANK BALANCE ANALYSIS", heading_style))
+    
+    if not df_by_bank.empty:
+        # Bank balance summary
+        bank_data = [['Bank', 'Available Balance', 'After Settlement']]
+        for _, row in df_by_bank.head(10).iterrows():
+            after_settlement = f"SAR {row.get('after_settlement', 0):,.0f}" if 'after_settlement' in row and pd.notna(row.get('after_settlement')) else 'N/A'
+            bank_data.append([
+                row['bank'],
+                f"SAR {row['balance']:,.0f}",
+                after_settlement
+            ])
+        
+        bank_table = Table(bank_data, colWidths=[2.5*inch, 1.5*inch, 1.5*inch])
+        bank_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#3b5bfd')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f8fafc')),
+            ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, HexColor('#f8fafc')])
+        ]))
+        story.append(bank_table)
+        
+        # Bank insights
+        neg_banks = df_by_bank[df_by_bank['balance'] < 0] if not df_by_bank.empty else pd.DataFrame()
+        if not neg_banks.empty:
+            story.append(Spacer(1, 12))
+            story.append(Paragraph("⚠️ ATTENTION: Negative Balances Detected", subheading_style))
+            neg_text = f"{len(neg_banks)} bank(s) showing negative available balance with total deficit of SAR {neg_banks['balance'].sum():,.0f}."
+            story.append(Paragraph(neg_text, body_style))
+    else:
+        story.append(Paragraph("No bank balance data available for this period.", body_style))
+    
+    story.append(Spacer(1, 20))
+    story.append(Paragraph("2. LC SETTLEMENTS & OBLIGATIONS", heading_style))
+    
+    if not df_lc.empty:
+        lc_month = df_lc[(df_lc["settlement_date"] >= month_start) & (df_lc["settlement_date"] <= month_end)]
+        
+        lc_summary_text = f"""
+        During {month_start.strftime('%B %Y')}, there were {len(lc_month)} LC settlements totaling SAR {lc_month['amount'].sum():,.0f}.
+        Current outstanding balance due: SAR {balance_due_value:,.0f}.
+        """
+        story.append(Paragraph(lc_summary_text, body_style))
+        
+        if not lc_month.empty:
+            # LC details table
+            lc_data = [['Bank', 'Settlement Date', 'Amount', 'Type']]
+            for _, row in lc_month.head(15).iterrows():
+                lc_data.append([
+                    row['bank'],
+                    row['settlement_date'].strftime('%Y-%m-%d'),
+                    f"SAR {row['amount']:,.0f}",
+                    str(row.get('type', ''))
+                ])
+            
+            lc_table = Table(lc_data, colWidths=[2*inch, 1.5*inch, 1.5*inch, 1*inch])
+            lc_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#14b8a6')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f0fdfa')),
+                ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0')),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, HexColor('#f0fdfa')])
+            ]))
+            story.append(lc_table)
+    else:
+        story.append(Paragraph("No LC settlement data available for this period.", body_style))
+    
+    story.append(Spacer(1, 20))
+    story.append(Paragraph("3. SUPPLIER PAYMENTS ANALYSIS", heading_style))
+    
+    if not df_pay_approved.empty:
+        payment_summary = f"""
+        Total approved payments this period: SAR {df_pay_approved['amount'].sum():,.0f} across {len(df_pay_approved)} transactions.
+        Payment concentration by bank shows the distribution of approved supplier payments.
+        """
+        story.append(Paragraph(payment_summary, body_style))
+        
+        # Payment by bank summary
+        pay_by_bank = df_pay_approved.groupby('bank')['amount'].agg(['sum', 'count']).reset_index()
+        pay_by_bank.columns = ['Bank', 'Total Amount', 'Count']
+        pay_by_bank = pay_by_bank.sort_values('Total Amount', ascending=False).head(10)
+        
+        pay_data = [['Bank', 'Total Amount', 'Transaction Count']]
+        for _, row in pay_by_bank.iterrows():
+            pay_data.append([
+                row['Bank'],
+                f"SAR {row['Total Amount']:,.0f}",
+                str(int(row['Count']))
+            ])
+        
+        pay_table = Table(pay_data, colWidths=[2.5*inch, 1.5*inch, 1*inch])
+        pay_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#059669')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), HexColor('#ecfdf5')),
+            ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, HexColor('#ecfdf5')])
+        ]))
+        story.append(pay_table)
+    else:
+        story.append(Paragraph("No approved supplier payment data available for this period.", body_style))
+    
+    # Exchange Rates Section
+    if not df_fx.empty and st.session_state.get("show_fx", True):
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("4. EXCHANGE RATE MOVEMENTS", heading_style))
+        
+        fx_month = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)]
+        if not fx_month.empty:
+            latest_fx = fx_month.groupby("currency_pair").last().reset_index()
+            
+            fx_summary = f"""
+            Exchange rate monitoring shows movements across {len(latest_fx)} currency pairs during {month_start.strftime('%B %Y')}.
+            Key currency pairs against SAR are tracked for treasury risk management.
+            """
+            story.append(Paragraph(fx_summary, body_style))
+            
+            # FX table
+            fx_data = [['Currency Pair', 'Current Rate', 'Change %']]
+            for _, row in latest_fx.iterrows():
+                change_pct = f"{row.get('change_pct', 0):+.2f}%" if 'change_pct' in row and pd.notna(row.get('change_pct')) else 'N/A'
+                fx_data.append([
+                    row['currency_pair'],
+                    f"{row['rate']:.4f}",
+                    change_pct
+                ])
+            
+            fx_table = Table(fx_data, colWidths=[2*inch, 1.5*inch, 1.5*inch])
+            fx_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f59e0b')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), HexColor('#fef3c7')),
+                ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0')),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, HexColor('#fef3c7')])
+            ]))
+            story.append(fx_table)
+    
+    # Branch Performance
+    if not df_cvp.empty:
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("5. BRANCH PERFORMANCE ANALYSIS", heading_style))
+        
+        branch_summary = f"""
+        Branch-wise collection vs payments analysis shows net position across {len(df_cvp)} branches.
+        Positive net indicates collections exceeding payments, negative indicates payment outflow.
+        """
+        story.append(Paragraph(branch_summary, body_style))
+        
+        # Branch table
+        branch_data = [['Branch', 'Collections', 'Payments', 'Net Position']]
+        df_cvp_sorted = df_cvp.sort_values('net', ascending=False)
+        for _, row in df_cvp_sorted.iterrows():
+            branch_data.append([
+                row['branch'],
+                f"SAR {row['collection']:,.0f}",
+                f"SAR {row['payments']:,.0f}",
+                f"SAR {row['net']:,.0f}"
+            ])
+        
+        branch_table = Table(branch_data, colWidths=[2*inch, 1.3*inch, 1.3*inch, 1.4*inch])
+        branch_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#6366f1')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f1f5f9')),
+            ('GRID', (0, 0), (-1, -1), 1, HexColor('#e2e8f0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, HexColor('#f1f5f9')])
+        ]))
+        story.append(branch_table)
+    
+    # Recommendations
+    story.append(Spacer(1, 20))
+    story.append(Paragraph("6. KEY RECOMMENDATIONS", heading_style))
+    
+    recommendations = []
+    
+    if not df_by_bank.empty:
+        if (df_by_bank['balance'] < 0).any():
+            recommendations.append("• Address negative bank balances immediately to avoid overdraft fees and maintain banking relationships.")
+        
+        if total_balance > 0 and approved_sum / total_balance > 0.8:
+            recommendations.append("• Monitor cash flow closely as approved payments represent over 80% of available balance.")
+    
+    if not df_lc.empty:
+        urgent_lc = df_lc[df_lc["settlement_date"] <= pd.Timestamp.now() + pd.Timedelta(days=7)]
+        if not urgent_lc.empty:
+            recommendations.append(f"• Prepare for {len(urgent_lc)} LC settlements due within 7 days totaling SAR {urgent_lc['amount'].sum():,.0f}.")
+    
+    if not df_fm.empty and len(df_fm) > 5:
+        recent_trend = df_fm.tail(5)["total_liquidity"].pct_change().mean()
+        if pd.notna(recent_trend) and recent_trend < -0.05:
+            recommendations.append("• Review liquidity management strategy as recent trend shows declining liquidity position.")
+    
+    recommendations.append("• Continue monitoring exchange rate movements for foreign currency exposure management.")
+    recommendations.append("• Regular review of supplier payment cycles to optimize cash flow timing.")
+    
+    for rec in recommendations:
+        story.append(Paragraph(rec, body_style))
+    
+    # Footer
+    story.append(Spacer(1, 30))
+    footer_text = f"""
+    This report was automatically generated by the Treasury Management System on {datetime.now().strftime('%B %d, %Y at %H:%M')}.
+    For questions or clarifications, please contact the Treasury Department.
+    
+    Powered by Jaseer Pykkarathodi
+    """
+    story.append(Paragraph(footer_text, body_style))
+    
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+def create_download_link(val, filename):
+    """Generate download link for PDF"""
+    b64 = base64.b64encode(val).decode()
+    return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">Download PDF Report</a>'
     if df_raw.empty:
         return np.nan
     try:
