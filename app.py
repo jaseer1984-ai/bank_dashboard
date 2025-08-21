@@ -1,9 +1,10 @@
-# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored)
+# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
 # - Comma-separated numeric formatting (with decimals where needed)
 # - Plotly toolbars hidden
 # - Colored tabs via CSS (no Streamlit tab code changes needed)
 # - Exchange Rates functionality restored
+# - Added "Paid" value in LCR & STL Settlements overview
 
 import io
 import time
@@ -479,7 +480,7 @@ def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
+def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     try:
         d = cols_lower(df)
 
@@ -500,7 +501,7 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
         ref_col    = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
 
         if not all([bank_col, date_col, amount_col]):
-            return pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame()
 
         out = pd.DataFrame({
             "reference": d[ref_col].astype(str).str.strip() if ref_col else "",
@@ -515,14 +516,20 @@ def parse_settlements(df: pd.DataFrame) -> pd.DataFrame:
 
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
 
+        # Separate pending and paid settlements
+        df_pending = pd.DataFrame()
+        df_paid = pd.DataFrame()
+        
         if status_col:
-            has_pending = out["status"].str.contains("pending", case=False, na=False).any()
-            if has_pending:
-                out = out[out["status"].str.contains("pending", case=False, na=False)]
+            df_pending = out[out["status"].str.contains("pending", case=False, na=False)].copy()
+            df_paid = out[out["status"].str.contains("paid", case=False, na=False)].copy()
+        else:
+            # If no status column, treat all as pending
+            df_pending = out.copy()
 
-        return out.reset_index(drop=True)
+        return df_pending.reset_index(drop=True), df_paid.reset_index(drop=True)
     except Exception:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
 def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
     try:
@@ -750,7 +757,7 @@ def main():
         df_pay_released = pd.DataFrame()
 
     df_lc_raw = read_csv(LINKS["SETTLEMENTS"])
-    df_lc = parse_settlements(df_lc_raw)
+    df_lc, df_lc_paid = parse_settlements(df_lc_raw)
     balance_due_value = extract_balance_due_value(df_lc_raw)
 
     df_fm_raw = read_csv(LINKS["Fund Movement"])
@@ -919,35 +926,45 @@ def main():
 
         # 2) LCR & STL Settlements this month
         st.subheader("LCR & STL Settlements — This Month")
-        if df_lc.empty:
+        if df_lc.empty and df_lc_paid.empty:
             st.info("No LCR & STL data.")
         else:
-            lc_m = df_lc[(df_lc["settlement_date"] >= month_start) & (df_lc["settlement_date"] <= month_end)].copy()
-            if lc_m.empty:
-                st.write("No LCR & STL due this month.")
+            lc_m = df_lc[(df_lc["settlement_date"] >= month_start) & (df_lc["settlement_date"] <= month_end)].copy() if not df_lc.empty else pd.DataFrame()
+            lc_paid_m = df_lc_paid[(df_lc_paid["settlement_date"] >= month_start) & (df_lc_paid["settlement_date"] <= month_end)].copy() if not df_lc_paid.empty else pd.DataFrame()
+            
+            if lc_m.empty and lc_paid_m.empty:
+                st.write("No LCR & STL for this month.")
             else:
-                lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
-                weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
-                k1, k2, k3 = st.columns(3)
-                with k1: st.metric("Current Due", fmt_number_only(lc_m["amount"].sum()))
-                with k2: st.metric("# of LCR & STL", len(lc_m))
-                with k3: st.metric("Remaining in Month", fmt_number(balance_due_value, 2))
-                try:
-                    import plotly.io as pio, plotly.graph_objects as go
-                    if "brand" not in pio.templates:
-                        pio.templates["brand"] = pio.templates["plotly_white"]
-                        pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
-                        pio.templates["brand"].layout.font.family = APP_FONT
-                    fig = go.Figure(go.Bar(x=weekly["week"], y=weekly["amount"]))
-                    fig.update_layout(template="brand", height=280, margin=dict(l=20,r=20,t=10,b=10),
-                                      xaxis_title="ISO Week", yaxis_title="Amount (SAR)", showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
-                except Exception:
-                    st.bar_chart(weekly.set_index("week")["amount"])
-                detail = lc_m[["bank","settlement_date","amount","type","remark"]].rename(
-                    columns={"bank":"Bank","settlement_date":"Due Date","amount":"Amount","type":"Type","remark":"Remark"})
-                detail["Due Date"] = detail["Due Date"].dt.strftime(config.DATE_FMT)
-                st.dataframe(style_right(detail, num_cols=["Amount"]), use_container_width=True, height=280)
+                # Calculate paid amount for the month
+                paid_amount = lc_paid_m["amount"].sum() if not lc_paid_m.empty else 0.0
+                
+                if not lc_m.empty:
+                    lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
+                    weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
+                    
+                k1, k2, k3, k4 = st.columns(4)
+                with k1: st.metric("Current Due", fmt_number_only(lc_m["amount"].sum() if not lc_m.empty else 0))
+                with k2: st.metric("# of LCR & STL", len(lc_m) if not lc_m.empty else 0)
+                with k3: st.metric("Paid", fmt_number_only(paid_amount))
+                with k4: st.metric("Remaining in Month", fmt_number(balance_due_value, 2))
+                
+                if not lc_m.empty:
+                    try:
+                        import plotly.io as pio, plotly.graph_objects as go
+                        if "brand" not in pio.templates:
+                            pio.templates["brand"] = pio.templates["plotly_white"]
+                            pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                            pio.templates["brand"].layout.font.family = APP_FONT
+                        fig = go.Figure(go.Bar(x=weekly["week"], y=weekly["amount"]))
+                        fig.update_layout(template="brand", height=280, margin=dict(l=20,r=20,t=10,b=10),
+                                          xaxis_title="ISO Week", yaxis_title="Amount (SAR)", showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    except Exception:
+                        st.bar_chart(weekly.set_index("week")["amount"])
+                    detail = lc_m[["bank","settlement_date","amount","type","remark"]].rename(
+                        columns={"bank":"Bank","settlement_date":"Due Date","amount":"Amount","type":"Type","remark":"Remark"})
+                    detail["Due Date"] = detail["Due Date"].dt.strftime(config.DATE_FMT)
+                    st.dataframe(style_right(detail, num_cols=["Amount"]), use_container_width=True, height=280)
 
         st.markdown("---")
 
@@ -1178,6 +1195,31 @@ def main():
                     for _, lc in urgent_lcs.iterrows():
                         days_left = (lc["settlement_date"] - today0).days
                         st.write(f"• {lc['bank']} - {fmt_number_only(lc['amount'])} - {days_left} day(s) left)")
+        
+        # Add section for paid settlements
+        if not df_lc_paid.empty:
+            st.markdown("---")
+            st.markdown('<span class="section-chip">✅ LCR & STL Settlements — Paid</span>', unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                paid_start_date = st.date_input("From Date", value=df_lc_paid["settlement_date"].min().date(), key="paid_start")
+            with c2:
+                paid_end_date = st.date_input("To Date", value=df_lc_paid["settlement_date"].max().date(), key="paid_end")
+            lc_paid_view = df_lc_paid[(df_lc_paid["settlement_date"].dt.date >= paid_start_date) & (df_lc_paid["settlement_date"].dt.date <= paid_end_date)].copy()
+            
+            if not lc_paid_view.empty:
+                cc1, cc2 = st.columns(2)
+                with cc1: st.metric("Total Paid Amount", fmt_number_only(lc_paid_view["amount"].sum()))
+                with cc2: st.metric("Number of Paid LCR & STL", len(lc_paid_view))
+                
+                viz_paid = lc_paid_view.copy()
+                viz_paid["Settlement Date"] = viz_paid["settlement_date"].dt.strftime(config.DATE_FMT)
+                rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
+                viz_paid = viz_paid.rename(columns={k: v for k, v in rename.items() if k in viz_paid.columns})
+                cols_paid = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]
+                cols_paid = [c for c in cols_paid if c in viz_paid.columns]
+                show_paid = viz_paid[cols_paid].sort_values("Settlement Date", ascending=False)
+                st.dataframe(style_right(show_paid, num_cols=["Amount"]), use_container_width=True, height=300)
 
     # ---- Supplier Payments tab ----
     with tab_payments:
