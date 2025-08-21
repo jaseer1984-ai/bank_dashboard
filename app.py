@@ -959,27 +959,57 @@ def main():
             if lc_m.empty and lc_paid_m.empty:
                 st.write("No LCR & STL for this month.")
             else:
-                # Calculate metrics
-                current_due = lc_m["amount"].sum() if not lc_m.empty else 0.0
-                paid_amount = lc_paid_m["amount"].sum() if not lc_paid_m.empty else 0.0
-                count_pending = len(lc_m) if not lc_m.empty else 0
-                count_paid = len(lc_paid_m) if not lc_paid_m.empty else 0
-                total_amount = current_due + paid_amount
-                completion_rate = (paid_amount / total_amount * 100) if total_amount > 0 else 0
+                # Calculate metrics with specific criteria - ALL DATA (not just current month)
+                # Use all settlement data, not just current month
+                all_pending = df_lc.copy() if not df_lc.empty else pd.DataFrame()
+                all_paid = df_lc_paid.copy() if not df_lc_paid.empty else pd.DataFrame()
                 
-                # Enhanced KPI Cards
+                # Total Due: Sum of all amounts in column D (ALL settlements)
+                total_due = (all_pending["amount"].sum() if not all_pending.empty else 0.0) + \
+                           (all_paid["amount"].sum() if not all_paid.empty else 0.0)
+                
+                # Current Due: Sum of column D where Status="PENDING" AND Remark is not empty
+                if not all_pending.empty:
+                    # Check for non-empty remarks - look for rows with actual text content
+                    current_due_mask = (all_pending["status"].str.upper().str.strip() == "PENDING") & \
+                                      (all_pending["remark"].notna()) & \
+                                      (all_pending["remark"].astype(str).str.strip() != "") & \
+                                      (all_pending["remark"].astype(str).str.strip() != "-") & \
+                                      (all_pending["remark"].astype(str).str.strip().str.lower() != "nan")
+                    current_due = all_pending.loc[current_due_mask, "amount"].sum()
+                else:
+                    current_due = 0.0
+                
+                # Paid: Sum of column D where Status="CLOSED"
+                paid_amount = all_paid["amount"].sum() if not all_paid.empty else 0.0
+                
+                # Balance Due: Sum of column D where Status="PENDING" (regardless of remark)  
+                balance_due = all_pending["amount"].sum() if not all_pending.empty else 0.0
+                
+                # Count metrics
+                count_pending = len(all_pending) if not all_pending.empty else 0
+                count_paid = len(all_paid) if not all_paid.empty else 0
+                count_current_due = len(all_pending.loc[current_due_mask]) if not all_pending.empty and 'current_due_mask' in locals() else 0
+                
+                # Completion rate based on Total Due
+                completion_rate = (paid_amount / total_due * 100) if total_due > 0 else 0
+                
+                # For chart - still use current month data
+                lc_m_chart = lc_m.copy() if not lc_m.empty else pd.DataFrame()
+                
+                # Enhanced KPI Cards with new criteria
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
                     st.markdown(
                         f"""
-                        <div class="dash-card" style="background:linear-gradient(135deg, #fee2e2 0%, #fef2f2 100%);
-                             padding:24px;border-radius:16px;border-left:6px solid #dc2626;margin-bottom:20px;
-                             box-shadow:0 4px 12px rgba(220,38,38,.15);position:relative;overflow:hidden;">
-                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">⚠️</div>
-                            <div style="font-size:14px;color:#7f1d1d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Current Due</div>
-                            <div style="font-size:28px;font-weight:900;color:#7f1d1d;margin-bottom:8px;">{fmt_number_only(current_due)}</div>
-                            <div style="font-size:12px;color:#991b1b;opacity:0.8;">Pending Settlements</div>
+                        <div class="dash-card" style="background:linear-gradient(135deg, #f3e8ff 0%, #faf5ff 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #7c3aed;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(124,58,237,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">💰</div>
+                            <div style="font-size:14px;color:#581c87;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Total Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#581c87;margin-bottom:8px;">{fmt_number_only(total_due)}</div>
+                            <div style="font-size:12px;color:#7c2d92;opacity:0.8;">All Settlements</div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -988,13 +1018,13 @@ def main():
                 with col2:
                     st.markdown(
                         f"""
-                        <div class="dash-card" style="background:linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
-                             padding:24px;border-radius:16px;border-left:6px solid #2563eb;margin-bottom:20px;
-                             box-shadow:0 4px 12px rgba(37,99,235,.15);position:relative;overflow:hidden;">
-                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">📊</div>
-                            <div style="font-size:14px;color:#1e3a8a;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;"># of LCR & STL</div>
-                            <div style="font-size:28px;font-weight:900;color:#1e3a8a;margin-bottom:8px;">{count_pending}</div>
-                            <div style="font-size:12px;color:#1d4ed8;opacity:0.8;">Due This Month</div>
+                        <div class="dash-card" style="background:linear-gradient(135deg, #fee2e2 0%, #fef2f2 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #dc2626;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(220,38,38,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">⚠️</div>
+                            <div style="font-size:14px;color:#7f1d1d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Current Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#7f1d1d;margin-bottom:8px;">{fmt_number_only(current_due)}</div>
+                            <div style="font-size:12px;color:#991b1b;opacity:0.8;">Pending + Remarks ({count_current_due})</div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -1009,7 +1039,7 @@ def main():
                             <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">✅</div>
                             <div style="font-size:14px;color:#14532d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Paid</div>
                             <div style="font-size:28px;font-weight:900;color:#14532d;margin-bottom:8px;">{fmt_number_only(paid_amount)}</div>
-                            <div style="font-size:12px;color:#15803d;opacity:0.8;">Completed ({count_paid} items)</div>
+                            <div style="font-size:12px;color:#15803d;opacity:0.8;">Closed Status ({count_paid})</div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -1022,15 +1052,15 @@ def main():
                              padding:24px;border-radius:16px;border-left:6px solid #d97706;margin-bottom:20px;
                              box-shadow:0 4px 12px rgba(217,119,6,.15);position:relative;overflow:hidden;">
                             <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">📋</div>
-                            <div style="font-size:14px;color:#92400e;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Remaining in Month</div>
-                            <div style="font-size:28px;font-weight:900;color:#92400e;margin-bottom:8px;">{fmt_number(balance_due_value, 0)}</div>
-                            <div style="font-size:12px;color:#a16207;opacity:0.8;">Balance Due</div>
+                            <div style="font-size:14px;color:#92400e;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Balance Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#92400e;margin-bottom:8px;">{fmt_number_only(balance_due)}</div>
+                            <div style="font-size:12px;color:#a16207;opacity:0.8;">All Pending ({count_pending})</div>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
                 
-                # Progress Summary Card
+                # Progress Summary Card with updated calculations
                 st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
                 st.markdown(
                     f"""
@@ -1045,10 +1075,11 @@ def main():
                             <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);
                                  border-radius:6px;width:{completion_rate}%;transition:width 0.3s ease;"></div>
                         </div>
-                        <div style="display:flex;justify-content:space-between;font-size:14px;">
-                            <span style="color:#16a34a;font-weight:600;">✅ Completed: {fmt_number_only(paid_amount)}</span>
-                            <span style="color:#dc2626;font-weight:600;">⏳ Pending: {fmt_number_only(current_due)}</span>
-                            <span style="color:#1f2937;font-weight:700;">💰 Total: {fmt_number_only(total_amount)}</span>
+                        <div style="display:flex;justify-content:space-between;font-size:14px;flex-wrap:wrap;gap:8px;">
+                            <span style="color:#7c3aed;font-weight:600;">💰 Total: {fmt_number_only(total_due)}</span>
+                            <span style="color:#dc2626;font-weight:600;">⚠️ Current: {fmt_number_only(current_due)}</span>
+                            <span style="color:#16a34a;font-weight:600;">✅ Paid: {fmt_number_only(paid_amount)}</span>
+                            <span style="color:#d97706;font-weight:600;">📋 Balance: {fmt_number_only(balance_due)}</span>
                         </div>
                     </div>
                     """,
