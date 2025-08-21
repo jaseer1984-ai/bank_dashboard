@@ -945,8 +945,11 @@ def main():
 
         st.markdown("---")
 
-        # 2) LCR & STL Settlements this month
-        st.subheader("LCR & STL Settlements — This Month")
+        # 2) LCR & STL Settlements this month - Enhanced Visual Design
+        st.markdown("---")
+        st.markdown('<span class="section-chip">📅 LCR & STL Settlements — This Month</span>', unsafe_allow_html=True)
+        st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+        
         if df_lc.empty and df_lc_paid.empty:
             st.info("No LCR & STL data.")
         else:
@@ -956,36 +959,207 @@ def main():
             if lc_m.empty and lc_paid_m.empty:
                 st.write("No LCR & STL for this month.")
             else:
-                # Calculate paid amount for the month
+                # Calculate metrics
+                current_due = lc_m["amount"].sum() if not lc_m.empty else 0.0
                 paid_amount = lc_paid_m["amount"].sum() if not lc_paid_m.empty else 0.0
+                count_pending = len(lc_m) if not lc_m.empty else 0
+                count_paid = len(lc_paid_m) if not lc_paid_m.empty else 0
+                total_amount = current_due + paid_amount
+                completion_rate = (paid_amount / total_amount * 100) if total_amount > 0 else 0
                 
+                # Enhanced KPI Cards
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #fee2e2 0%, #fef2f2 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #dc2626;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(220,38,38,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">⚠️</div>
+                            <div style="font-size:14px;color:#7f1d1d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Current Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#7f1d1d;margin-bottom:8px;">{fmt_number_only(current_due)}</div>
+                            <div style="font-size:12px;color:#991b1b;opacity:0.8;">Pending Settlements</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                
+                with col2:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #2563eb;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(37,99,235,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">📊</div>
+                            <div style="font-size:14px;color:#1e3a8a;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;"># of LCR & STL</div>
+                            <div style="font-size:28px;font-weight:900;color:#1e3a8a;margin-bottom:8px;">{count_pending}</div>
+                            <div style="font-size:12px;color:#1d4ed8;opacity:0.8;">Due This Month</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                
+                with col3:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #16a34a;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(22,163,74,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">✅</div>
+                            <div style="font-size:14px;color:#14532d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Paid</div>
+                            <div style="font-size:28px;font-weight:900;color:#14532d;margin-bottom:8px;">{fmt_number_only(paid_amount)}</div>
+                            <div style="font-size:12px;color:#15803d;opacity:0.8;">Completed ({count_paid} items)</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                
+                with col4:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #d97706;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(217,119,6,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">📋</div>
+                            <div style="font-size:14px;color:#92400e;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Remaining in Month</div>
+                            <div style="font-size:28px;font-weight:900;color:#92400e;margin-bottom:8px;">{fmt_number(balance_due_value, 0)}</div>
+                            <div style="font-size:12px;color:#a16207;opacity:0.8;">Balance Due</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                
+                # Progress Summary Card
+                st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f"""
+                    <div class="dash-card" style="background:linear-gradient(135deg, {THEME['heading_bg']} 0%, #ffffff 100%);
+                         padding:24px;border-radius:16px;border:2px solid {THEME['accent1']};margin-bottom:24px;
+                         box-shadow:0 8px 24px rgba(0,0,0,.08);">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                            <div style="font-size:18px;font-weight:800;color:#1f2937;">📈 Settlement Progress</div>
+                            <div style="font-size:24px;font-weight:900;color:{THEME['accent1']};">{completion_rate:.1f}%</div>
+                        </div>
+                        <div style="width:100%;height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:16px;">
+                            <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);
+                                 border-radius:6px;width:{completion_rate}%;transition:width 0.3s ease;"></div>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;font-size:14px;">
+                            <span style="color:#16a34a;font-weight:600;">✅ Completed: {fmt_number_only(paid_amount)}</span>
+                            <span style="color:#dc2626;font-weight:600;">⏳ Pending: {fmt_number_only(current_due)}</span>
+                            <span style="color:#1f2937;font-weight:700;">💰 Total: {fmt_number_only(total_amount)}</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+                
+                # Enhanced Chart Section
                 if not lc_m.empty:
                     lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
                     weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
                     
-                k1, k2, k3, k4 = st.columns(4)
-                with k1: st.metric("Current Due", fmt_number_only(lc_m["amount"].sum() if not lc_m.empty else 0))
-                with k2: st.metric("# of LCR & STL", len(lc_m) if not lc_m.empty else 0)
-                with k3: st.metric("Paid", fmt_number_only(paid_amount))
-                with k4: st.metric("Remaining in Month", fmt_number(balance_due_value, 2))
+                    chart_col1, chart_col2 = st.columns([2, 1])
+                    
+                    with chart_col1:
+                        st.markdown("### 📊 Weekly Settlement Schedule")
+                        try:
+                            import plotly.io as pio, plotly.graph_objects as go
+                            if "brand" not in pio.templates:
+                                pio.templates["brand"] = pio.templates["plotly_white"]
+                                pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                                pio.templates["brand"].layout.font.family = APP_FONT
+                            
+                            fig = go.Figure()
+                            fig.add_trace(go.Bar(
+                                x=[f"Week {w}" for w in weekly["week"]], 
+                                y=weekly["amount"],
+                                marker=dict(
+                                    color=weekly["amount"],
+                                    colorscale=[[0, '#fee2e2'], [0.5, '#fecaca'], [1, '#dc2626']],
+                                    line=dict(width=2, color='white')
+                                ),
+                                text=[f"SAR {v:,.0f}" for v in weekly["amount"]],
+                                textposition="outside",
+                                hovertemplate="<b>%{x}</b><br>Amount: SAR %{y:,.0f}<extra></extra>"
+                            ))
+                            
+                            fig.update_layout(
+                                template="brand", 
+                                height=350, 
+                                margin=dict(l=20,r=20,t=20,b=40),
+                                xaxis_title="", 
+                                yaxis_title="Amount (SAR)", 
+                                showlegend=False,
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                xaxis=dict(gridcolor='rgba(0,0,0,0.1)'),
+                                yaxis=dict(gridcolor='rgba(0,0,0,0.1)')
+                            )
+                            st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                        except Exception:
+                            st.bar_chart(weekly.set_index("week")["amount"])
+                    
+                    with chart_col2:
+                        st.markdown("### 🎯 Key Insights")
+                        if not weekly.empty:
+                            peak_week = weekly.loc[weekly["amount"].idxmax()]
+                            avg_weekly = weekly["amount"].mean()
+                            
+                            st.markdown(
+                                f"""
+                                <div style="background:#f8fafc;padding:20px;border-radius:12px;border-left:4px solid {THEME['accent1']};margin-bottom:16px;">
+                                    <div style="font-size:12px;color:#64748b;margin-bottom:8px;font-weight:600;">PEAK WEEK</div>
+                                    <div style="font-size:16px;font-weight:800;color:#1e293b;">Week {int(peak_week['week'])}</div>
+                                    <div style="font-size:14px;color:{THEME['accent1']};font-weight:600;">{fmt_number_only(peak_week['amount'])}</div>
+                                </div>
+                                
+                                <div style="background:#f8fafc;padding:20px;border-radius:12px;border-left:4px solid {THEME['accent2']};margin-bottom:16px;">
+                                    <div style="font-size:12px;color:#64748b;margin-bottom:8px;font-weight:600;">AVG WEEKLY</div>
+                                    <div style="font-size:16px;font-weight:800;color:#1e293b;">{fmt_number_only(avg_weekly)}</div>
+                                    <div style="font-size:12px;color:#64748b;">per week</div>
+                                </div>
+                                
+                                <div style="background:#f8fafc;padding:20px;border-radius:12px;border-left:4px solid #64748b;">
+                                    <div style="font-size:12px;color:#64748b;margin-bottom:8px;font-weight:600;">WEEKS ACTIVE</div>
+                                    <div style="font-size:16px;font-weight:800;color:#1e293b;">{len(weekly)}</div>
+                                    <div style="font-size:12px;color:#64748b;">this month</div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
                 
+                # Settlement Details Table
                 if not lc_m.empty:
-                    try:
-                        import plotly.io as pio, plotly.graph_objects as go
-                        if "brand" not in pio.templates:
-                            pio.templates["brand"] = pio.templates["plotly_white"]
-                            pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
-                            pio.templates["brand"].layout.font.family = APP_FONT
-                        fig = go.Figure(go.Bar(x=weekly["week"], y=weekly["amount"]))
-                        fig.update_layout(template="brand", height=280, margin=dict(l=20,r=20,t=10,b=10),
-                                          xaxis_title="ISO Week", yaxis_title="Amount (SAR)", showlegend=False)
-                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
-                    except Exception:
-                        st.bar_chart(weekly.set_index("week")["amount"])
+                    st.markdown('<div style="height:24px;"></div>', unsafe_allow_html=True)
+                    st.markdown("### 📋 Settlement Details")
                     detail = lc_m[["bank","settlement_date","amount","type","remark"]].rename(
                         columns={"bank":"Bank","settlement_date":"Due Date","amount":"Amount","type":"Type","remark":"Remark"})
                     detail["Due Date"] = detail["Due Date"].dt.strftime(config.DATE_FMT)
-                    st.dataframe(style_right(detail, num_cols=["Amount"]), use_container_width=True, height=280)
+                    
+                    # Add urgency indicators
+                    detail_with_urgency = detail.copy()
+                    detail_with_urgency["Days Left"] = (pd.to_datetime(detail_with_urgency["Due Date"]) - today0_local).dt.days
+                    
+                    def add_urgency_icon(row):
+                        days = row["Days Left"]
+                        if days <= 2: return "🚨 " + row["Bank"]
+                        elif days <= 5: return "⚠️ " + row["Bank"] 
+                        else: return "✅ " + row["Bank"]
+                    
+                    detail_with_urgency["Bank"] = detail_with_urgency.apply(add_urgency_icon, axis=1)
+                    display_detail = detail_with_urgency[["Bank", "Due Date", "Amount", "Type", "Remark", "Days Left"]].sort_values("Days Left")
+                    
+                    st.dataframe(
+                        style_right(display_detail, num_cols=["Amount", "Days Left"]).applymap(
+                            lambda x: 'background-color: #fee2e2' if isinstance(x, (int, float)) and x <= 2 else
+                                     'background-color: #fef3c7' if isinstance(x, (int, float)) and x <= 5 else '',
+                            subset=["Days Left"]
+                        ), 
+                        use_container_width=True, 
+                        height=320
+                    )
 
         st.markdown("---")
 
