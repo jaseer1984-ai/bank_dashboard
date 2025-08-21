@@ -490,12 +490,32 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                    next((c for c in d.columns if "due" in c and "date" in c), None) or \
                    next((c for c in d.columns if c.strip().lower() == "date"), None)
 
-        amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
-                     next((c for c in d.columns if "currently" in c and "due" in c), None) or \
-                     next((c for c in d.columns if "balance" in c and "settlement" in c), None) or \
-                     next((c for c in ["amount(sar)", "amount", "value"] if c in d.columns), None)
+        # Direct column mapping for Amount SAR and Status
+        amount_col = None
+        status_col = None
+        
+        # Find amount column - look for column D which should be "amount sar" after lowercase
+        for col in d.columns:
+            col_lower = str(col).strip().lower()
+            if "amount" in col_lower and "sar" in col_lower:
+                amount_col = col
+                break
+        
+        # If not found, try other patterns
+        if not amount_col:
+            amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
+                         next((c for c in d.columns if "currently" in c and "due" in c), None) or \
+                         next((c for c in d.columns if "balance" in c and "settlement" in c), None) or \
+                         next((c for c in ["amount(sar)", "amount sar", "amount", "value"] if c in d.columns), None) or \
+                         next((c for c in d.columns if "amount" in c), None)
 
-        status_col = next((c for c in d.columns if "status" in c), None)
+        # Find status column - look for column G
+        for col in d.columns:
+            col_lower = str(col).strip().lower()
+            if "status" in col_lower:
+                status_col = col
+                break
+
         type_col   = next((c for c in d.columns if "type" in c), None)
         remark_col = next((c for c in d.columns if "remark" in c), None)
         ref_col    = next((c for c in d.columns if any(t in c for t in ["a/c", "ref", "account", "reference"])), None)
@@ -516,14 +536,14 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
 
-        # Separate pending and paid settlements
+        # Separate pending and closed/paid settlements using SUMIF logic
         df_pending = pd.DataFrame()
         df_paid = pd.DataFrame()
         
         if status_col:
-            df_pending = out[out["status"].str.contains("pending", case=False, na=False)].copy()
-            # Check for both "paid" and "closed" status as indicators of completed settlements
-            df_paid = out[out["status"].str.contains("paid|closed", case=False, na=False)].copy()
+            # SUMIF: if STATUS = "CLOSED" then include in paid, if STATUS = "PENDING" then include in pending
+            df_pending = out[out["status"].str.upper().str.strip() == "PENDING"].copy()
+            df_paid = out[out["status"].str.upper().str.strip() == "CLOSED"].copy()
         else:
             # If no status column, treat all as pending
             df_pending = out.copy()
