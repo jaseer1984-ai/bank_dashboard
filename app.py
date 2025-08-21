@@ -775,8 +775,7 @@ def main():
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0
 
     # Sidebar
-    render_sidebar({}, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=not df_fx.empty)
-
+    render_sidebar({}, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=False)
     # Density tokens
     pad = "12px" if st.session_state.get("compact_density", False) else "20px"
     radius = "10px" if st.session_state.get("compact_density", False) else "12px"
@@ -1503,3 +1502,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
