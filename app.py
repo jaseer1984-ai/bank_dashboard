@@ -1170,37 +1170,6 @@ def main():
                                 """,
                                 unsafe_allow_html=True
                             )
-                
-                # Settlement Details Table
-                if not lc_m.empty:
-                    st.markdown('<div style="height:24px;"></div>', unsafe_allow_html=True)
-                    st.markdown("### 📋 Settlement Details")
-                    detail = lc_m[["bank","settlement_date","amount","type","remark"]].rename(
-                        columns={"bank":"Bank","settlement_date":"Due Date","amount":"Amount","type":"Type","remark":"Remark"})
-                    detail["Due Date"] = detail["Due Date"].dt.strftime(config.DATE_FMT)
-                    
-                    # Add urgency indicators
-                    detail_with_urgency = detail.copy()
-                    detail_with_urgency["Days Left"] = (pd.to_datetime(detail_with_urgency["Due Date"]) - today0_local).dt.days
-                    
-                    def add_urgency_icon(row):
-                        days = row["Days Left"]
-                        if days <= 2: return "🚨 " + row["Bank"]
-                        elif days <= 5: return "⚠️ " + row["Bank"] 
-                        else: return "✅ " + row["Bank"]
-                    
-                    detail_with_urgency["Bank"] = detail_with_urgency.apply(add_urgency_icon, axis=1)
-                    display_detail = detail_with_urgency[["Bank", "Due Date", "Amount", "Type", "Remark", "Days Left"]].sort_values("Days Left")
-                    
-                    st.dataframe(
-                        style_right(display_detail, num_cols=["Amount", "Days Left"]).applymap(
-                            lambda x: 'background-color: #fee2e2' if isinstance(x, (int, float)) and x <= 2 else
-                                     'background-color: #fef3c7' if isinstance(x, (int, float)) and x <= 5 else '',
-                            subset=["Days Left"]
-                        ), 
-                        use_container_width=True, 
-                        height=320
-                    )
 
         st.markdown("---")
 
