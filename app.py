@@ -997,10 +997,13 @@ def main():
                     balance_due = 0.0
                     count_balance_due = 0
                 
-                # Count metrics
+                # Count metrics  
                 count_pending = len(all_pending) if not all_pending.empty else 0
                 count_paid = len(all_paid) if not all_paid.empty else 0
                 count_current_due = len(all_pending.loc[current_due_mask]) if not all_pending.empty and 'current_due_mask' in locals() else 0
+                # count_balance_due is calculated in the balance_due section above
+                if 'count_balance_due' not in locals():
+                    count_balance_due = 0
                 
                 # Completion rate based on Total Due
                 completion_rate = (paid_amount / total_due * 100) if total_due > 0 else 0
@@ -1020,7 +1023,6 @@ def main():
                             <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">💰</div>
                             <div style="font-size:14px;color:#581c87;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Total Due</div>
                             <div style="font-size:28px;font-weight:900;color:#581c87;margin-bottom:8px;">{fmt_number_only(total_due)}</div>
-                            <div style="font-size:12px;color:#7c2d92;opacity:0.8;">All Settlements</div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -1035,7 +1037,6 @@ def main():
                             <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">⚠️</div>
                             <div style="font-size:14px;color:#7f1d1d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Current Due</div>
                             <div style="font-size:28px;font-weight:900;color:#7f1d1d;margin-bottom:8px;">{fmt_number_only(current_due)}</div>
-                            <div style="font-size:12px;color:#991b1b;opacity:0.8;">Pending + Remarks ({count_current_due})</div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -1050,7 +1051,6 @@ def main():
                             <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">✅</div>
                             <div style="font-size:14px;color:#14532d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Paid</div>
                             <div style="font-size:28px;font-weight:900;color:#14532d;margin-bottom:8px;">{fmt_number_only(paid_amount)}</div>
-                            <div style="font-size:12px;color:#15803d;opacity:0.8;">Closed Status ({count_paid})</div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -1065,7 +1065,6 @@ def main():
                             <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">📋</div>
                             <div style="font-size:14px;color:#92400e;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Balance Due</div>
                             <div style="font-size:28px;font-weight:900;color:#92400e;margin-bottom:8px;">{fmt_number_only(balance_due)}</div>
-                            <div style="font-size:12px;color:#a16207;opacity:0.8;">All Pending ({count_pending})</div>
                         </div>
                         """,
                         unsafe_allow_html=True
