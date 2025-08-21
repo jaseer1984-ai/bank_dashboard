@@ -69,22 +69,22 @@ st.set_page_config(
 APP_FONT = os.getenv("APP_FONT", "Inter")
 
 def set_app_font(family: str = APP_FONT):
-    css = """
+    css = f"""
     <style>
-      @import url('https://fonts.googleapis.com/css2?family={font_q}:wght@300;400;500;600;700;800&display=swap');
-      :root {{ --app-font: '{font}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif; }}
+      @import url('https://fonts.googleapis.com/css2?family={family.replace(" ", "+")}:wght@300;400;500;600;700;800&display=swap');
+      :root {{ --app-font: '{family}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif; }}
       html, body, [class^="css"], [class*=" css"] {{ font-family: var(--app-font) !important; }}
       h1, h2, h3, h4, h5, h6, p, span, div, label, small, strong, em {{ font-family: var(--app-font) !important; }}
       button, input, textarea, select {{ font-family: var(--app-font) !important; }}
       div[data-testid="stMetricValue"], div[data-testid="stMetricLabel"] {{ font-family: var(--app-font) !important; }}
       div[data-testid="stDataFrame"] * {{ font-family: var(--app-font) !important; }}
       .stDataFrame, .stDataFrame * {{ font-variant-numeric: tabular-nums; }}
-      [data-testid="stDecoration"], [data-testid="stStatusWidget"], [data-testid="stToolbar"] {{ display: none !important; }}
+      /* Do NOT hide the toolbar—this holds the sidebar toggle */
+      /* [data-testid="stToolbar"] {{ display: none !important; }} */
     </style>
-    """.format(font_q=family.replace(" ", "+"), font=family)
+    """
     st.markdown(css, unsafe_allow_html=True)
 
-set_app_font()
 
 # ----------------------------
 # Theme Palettes
@@ -1765,3 +1765,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
