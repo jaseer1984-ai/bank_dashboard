@@ -705,7 +705,7 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
             )
         _kpi("TOTAL BALANCE", total_balance, THEME["heading_bg"], THEME["accent1"], "#1E3A8A")
         _kpi("APPROVED PAYMENTS", approved_sum, THEME["heading_bg"], THEME["accent2"], "#065F46")
-        _kpi("LC DUE (NEXT 4 DAYS)", lc_next4_sum, THEME["heading_bg"], THEME["accent1"], "#92400E")
+        _kpi("LCR & STL DUE (NEXT 4 DAYS)", lc_next4_sum, THEME["heading_bg"], THEME["accent1"], "#92400E")
         _kpi("ACTIVE BANKS", banks_cnt, THEME["heading_bg"], THEME["accent2"], "#9F1239")
 
         st.markdown("---")
@@ -806,8 +806,8 @@ def main():
     if not df_lc.empty:
         urgent7 = df_lc[df_lc["settlement_date"] <= today0 + pd.Timedelta(days=7)]
         if not urgent7.empty:
-            insights.append({"type": "error","title": "Urgent LC Settlements",
-                             "content": f"{len(urgent7)} LC settlements due within 7 days totaling {fmt_number_only(urgent7['amount'].sum())}."})
+            insights.append({"type": "error","title": "Urgent LCR & STL Settlements",
+                             "content": f"{len(urgent7)} LCR & STL settlements due within 7 days totaling {fmt_number_only(urgent7['amount'].sum())}."})
     if not df_fm.empty and len(df_fm) > 5:
         recent_trend = df_fm.tail(5)["total_liquidity"].pct_change().mean()
         if pd.notna(recent_trend) and recent_trend < -0.05:
@@ -917,20 +917,20 @@ def main():
 
         st.markdown("---")
 
-        # 2) LC Settlements this month
-        st.subheader("LC Settlements — This Month")
+        # 2) LCR & STL Settlements this month
+        st.subheader("LCR & STL Settlements — This Month")
         if df_lc.empty:
-            st.info("No LC data.")
+            st.info("No LCR & STL data.")
         else:
             lc_m = df_lc[(df_lc["settlement_date"] >= month_start) & (df_lc["settlement_date"] <= month_end)].copy()
             if lc_m.empty:
-                st.write("No LC due this month.")
+                st.write("No LCR & STL due this month.")
             else:
                 lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
                 weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
                 k1, k2, k3 = st.columns(3)
                 with k1: st.metric("Current Due", fmt_number_only(lc_m["amount"].sum()))
-                with k2: st.metric("# of LCs", len(lc_m))
+                with k2: st.metric("# of LCR & STL", len(lc_m))
                 with k3: st.metric("Remaining in Month", fmt_number(balance_due_value, 2))
                 try:
                     import plotly.io as pio, plotly.graph_objects as go
@@ -1120,9 +1120,9 @@ def main():
 
     # ---- Settlements tab ----
     with tab_settlements:
-        st.markdown('<span class="section-chip">📅 LC Settlements — Pending</span>', unsafe_allow_html=True)
+        st.markdown('<span class="section-chip">📅 LCR & STL Settlements — Pending</span>', unsafe_allow_html=True)
         if df_lc.empty:
-            st.info("No LC (Pending) data. Ensure the sheet has the required columns.")
+            st.info("No LCR & STL (Pending) data. Ensure the sheet has the required columns.")
         else:
             c1, c2 = st.columns(2)
             with c1:
@@ -1135,8 +1135,8 @@ def main():
                                       index=0, horizontal=True, key="lc_view")
                 if lc_display == "Summary + Table":
                     cc1, cc2, cc3 = st.columns(3)
-                    with cc1: st.metric("Total LC Amount", fmt_number_only(lc_view["amount"].sum()))
-                    with cc2: st.metric("Number of LCs", len(lc_view))
+                    with cc1: st.metric("Total LCR & STL Amount", fmt_number_only(lc_view["amount"].sum()))
+                    with cc2: st.metric("Number of LCR & STL", len(lc_view))
                     with cc3: st.metric("Urgent (2 days)", len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
                     viz = lc_view.copy()
                     viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
@@ -1159,7 +1159,7 @@ def main():
                     urgent = tmp[tmp["days_until_due"] <= 2]
                     warning = tmp[(tmp["days_until_due"] > 2) & (tmp["days_until_due"] <= 7)]
                     normal = tmp[tmp["days_until_due"] > 7]
-                    st.markdown("**📊 LC Settlements by Urgency**")
+                    st.markdown("**📊 LCR & STL Settlements by Urgency**")
                     if not urgent.empty:
                         st.markdown("**🚨 Urgent (≤2 days)**")
                         display_as_progress_bars(urgent.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}))
@@ -1174,7 +1174,7 @@ def main():
                     display_as_mini_cards(cards, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
                 urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
                 if not urgent_lcs.empty:
-                    st.warning(f"⚠️ {len(urgent_lcs)} LC(s) due within 3 days!")
+                    st.warning(f"⚠️ {len(urgent_lcs)} LCR & STL(s) due within 3 days!")
                     for _, lc in urgent_lcs.iterrows():
                         days_left = (lc["settlement_date"] - today0).days
                         st.write(f"• {lc['bank']} - {fmt_number_only(lc['amount'])} - {days_left} day(s) left)")
@@ -1502,4 +1502,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
