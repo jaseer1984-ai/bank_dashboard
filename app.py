@@ -1373,41 +1373,72 @@ def main():
 
     # ---- Settlements tab ----
     with tab_settlements:
-        st.markdown('<span class="section-chip">📅 LCR & STL Settlements — Pending</span>', unsafe_allow_html=True)
-        if df_lc.empty:
-            st.info("No LCR & STL (Pending) data. Ensure the sheet has the required columns.")
-        else:
-            c1, c2 = st.columns(2)
-            with c1:
-                start_date = st.date_input("From Date", value=df_lc["settlement_date"].min().date())
-            with c2:
-                end_date = st.date_input("To Date", value=df_lc["settlement_date"].max().date())
-            lc_view = df_lc[(df_lc["settlement_date"].dt.date >= start_date) & (df_lc["settlement_date"].dt.date <= end_date)].copy()
-            if not lc_view.empty:
-                lc_display = st.radio("Display as:", options=["Summary + Table", "Progress by Urgency", "Mini Cards"],
-                                      index=0, horizontal=True, key="lc_view")
-                if lc_display == "Summary + Table":
+        st.markdown('<span class="section-chip">📅 LCR & STL Settlements</span>', unsafe_allow_html=True)
+        
+        def render_settlements_tab(df_src: pd.DataFrame, status_label: str, key_suffix: str):
+            if df_src.empty:
+                st.info(f"No {status_label.lower()} settlements found."); return
+            
+            # Date filtering
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("From Date", value=df_src["settlement_date"].min().date(), key=f"start_{key_suffix}")
+            with col2:
+                end_date = st.date_input("To Date", value=df_src["settlement_date"].max().date(), key=f"end_{key_suffix}")
+            
+            # Filter data by date range
+            view_data = df_src[(df_src["settlement_date"].dt.date >= start_date) & (df_src["settlement_date"].dt.date <= end_date)].copy()
+            
+            if not view_data.empty:
+                settlement_view = st.radio("Display as:", options=["Summary + Table", "Progress by Urgency", "Mini Cards"],
+                                         index=0, horizontal=True, key=f"settlement_view_{key_suffix}")
+                
+                if settlement_view == "Summary + Table":
                     cc1, cc2, cc3 = st.columns(3)
-                    with cc1: st.metric("Total LCR & STL Amount", fmt_number_only(lc_view["amount"].sum()))
-                    with cc2: st.metric("Number of LCR & STL", len(lc_view))
-                    with cc3: st.metric("Urgent (2 days)", len(lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
-                    viz = lc_view.copy()
-                    viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
-                    viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
-                    rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
-                    viz = viz.rename(columns={k: v for k, v in rename.items() if k in viz.columns})
-                    cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Days Until Due", "Remark", "Description"]
-                    cols = [c for c in cols if c in viz.columns]
-                    show = viz[cols].sort_values("Settlement Date")
-                    def _highlight(row):
-                        if "Days Until Due" in row:
-                            if row["Days Until Due"] <= 2: return ['background-color: #fee2e2'] * len(row)
-                            if row["Days Until Due"] <= 7: return ['background-color: #fef3c7'] * len(row)
-                        return [''] * len(row)
-                    styled = style_right(show, num_cols=["Amount"]).apply(_highlight, axis=1)
-                    st.dataframe(styled, use_container_width=True, height=400)
-                elif lc_display == "Progress by Urgency":
-                    tmp = lc_view.copy()
+                    with cc1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
+                    with cc2: st.metric(f"Number of {status_label}", len(view_data))
+                    
+                    if status_label == "Pending":
+                        with cc3: st.metric("Urgent (2 days)", len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
+                        
+                        # Add urgency indicators for pending settlements
+                        viz = view_data.copy()
+                        viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
+                        viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
+                        rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
+                        viz = viz.rename(columns={k: v for k, v in rename.items() if k in viz.columns})
+                        cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Days Until Due", "Remark", "Description"]
+                        cols = [c for c in cols if c in viz.columns]
+                        show = viz[cols].sort_values("Settlement Date")
+                        
+                        def _highlight(row):
+                            if "Days Until Due" in row:
+                                if row["Days Until Due"] <= 2: return ['background-color: #fee2e2'] * len(row)
+                                if row["Days Until Due"] <= 7: return ['background-color: #fef3c7'] * len(row)
+                            return [''] * len(row)
+                        styled = style_right(show, num_cols=["Amount"]).apply(_highlight, axis=1)
+                        st.dataframe(styled, use_container_width=True, height=400)
+                        
+                        # Urgency warnings for pending
+                        urgent_settlements = view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=3)]
+                        if not urgent_settlements.empty:
+                            st.warning(f"⚠️ {len(urgent_settlements)} settlement(s) due within 3 days!")
+                            for _, settlement in urgent_settlements.iterrows():
+                                days_left = (settlement["settlement_date"] - today0).days
+                                st.write(f"• {settlement['bank']} - {fmt_number_only(settlement['amount'])} - {days_left} day(s) left")
+                    
+                    else:  # Paid settlements
+                        viz_paid = view_data.copy()
+                        viz_paid["Settlement Date"] = viz_paid["settlement_date"].dt.strftime(config.DATE_FMT)
+                        rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
+                        viz_paid = viz_paid.rename(columns={k: v for k, v in rename.items() if k in viz_paid.columns})
+                        cols_paid = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]
+                        cols_paid = [c for c in cols_paid if c in viz_paid.columns]
+                        show_paid = viz_paid[cols_paid].sort_values("Settlement Date", ascending=False)
+                        st.dataframe(style_right(show_paid, num_cols=["Amount"]), use_container_width=True, height=400)
+                
+                elif settlement_view == "Progress by Urgency" and status_label == "Pending":
+                    tmp = view_data.copy()
                     tmp["days_until_due"] = (tmp["settlement_date"] - today0).dt.days
                     urgent = tmp[tmp["days_until_due"] <= 2]
                     warning = tmp[(tmp["days_until_due"] > 2) & (tmp["days_until_due"] <= 7)]
@@ -1422,40 +1453,25 @@ def main():
                     if not normal.empty:
                         st.markdown("**✅ Normal (>7 days)**")
                         display_as_progress_bars(normal.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}))
-                else:
-                    cards = lc_view.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                    display_as_mini_cards(cards, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
-                urgent_lcs = lc_view[lc_view["settlement_date"] <= today0 + pd.Timedelta(days=3)]
-                if not urgent_lcs.empty:
-                    st.warning(f"⚠️ {len(urgent_lcs)} LCR & STL(s) due within 3 days!")
-                    for _, lc in urgent_lcs.iterrows():
-                        days_left = (lc["settlement_date"] - today0).days
-                        st.write(f"• {lc['bank']} - {fmt_number_only(lc['amount'])} - {days_left} day(s) left)")
-        
-        # Add section for paid settlements
-        if not df_lc_paid.empty:
-            st.markdown("---")
-            st.markdown('<span class="section-chip">✅ LCR & STL Settlements — Paid</span>', unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            with c1:
-                paid_start_date = st.date_input("From Date", value=df_lc_paid["settlement_date"].min().date(), key="paid_start")
-            with c2:
-                paid_end_date = st.date_input("To Date", value=df_lc_paid["settlement_date"].max().date(), key="paid_end")
-            lc_paid_view = df_lc_paid[(df_lc_paid["settlement_date"].dt.date >= paid_start_date) & (df_lc_paid["settlement_date"].dt.date <= paid_end_date)].copy()
-            
-            if not lc_paid_view.empty:
-                cc1, cc2 = st.columns(2)
-                with cc1: st.metric("Total Paid Amount", fmt_number_only(lc_paid_view["amount"].sum()))
-                with cc2: st.metric("Number of Paid LCR & STL", len(lc_paid_view))
                 
-                viz_paid = lc_paid_view.copy()
-                viz_paid["Settlement Date"] = viz_paid["settlement_date"].dt.strftime(config.DATE_FMT)
-                rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
-                viz_paid = viz_paid.rename(columns={k: v for k, v in rename.items() if k in viz_paid.columns})
-                cols_paid = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]
-                cols_paid = [c for c in cols_paid if c in viz_paid.columns]
-                show_paid = viz_paid[cols_paid].sort_values("Settlement Date", ascending=False)
-                st.dataframe(style_right(show_paid, num_cols=["Amount"]), use_container_width=True, height=300)
+                elif settlement_view == "Progress by Urgency" and status_label == "Paid":
+                    st.info("Progress by urgency view is only available for pending settlements.")
+                    # Show bank summary for paid
+                    bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
+                    display_as_progress_bars(bank_totals, "bank", "balance")
+                
+                else:  # Mini Cards
+                    cards = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
+                    display_as_mini_cards(cards, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
+            else:
+                st.info("No settlements match the selected criteria.")
+        
+        # Create sub-tabs for Pending and Paid settlements
+        tab_pending, tab_paid = st.tabs(["Pending", "Paid"])
+        with tab_pending: 
+            render_settlements_tab(df_lc, "Pending", "pending")
+        with tab_paid: 
+            render_settlements_tab(df_lc_paid, "Paid", "paid")
 
     # ---- Supplier Payments tab ----
     with tab_payments:
