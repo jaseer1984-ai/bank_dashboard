@@ -522,7 +522,8 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         
         if status_col:
             df_pending = out[out["status"].str.contains("pending", case=False, na=False)].copy()
-            df_paid = out[out["status"].str.contains("paid", case=False, na=False)].copy()
+            # Check for both "paid" and "closed" status as indicators of completed settlements
+            df_paid = out[out["status"].str.contains("paid|closed", case=False, na=False)].copy()
         else:
             # If no status column, treat all as pending
             df_pending = out.copy()
