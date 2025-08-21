@@ -947,8 +947,9 @@ def main():
 
         # 2) LCR & STL Settlements this month - Enhanced Visual Design
         st.markdown("---")
-        st.markdown('<span class="section-chip">📅 LCR & STL Settlements — This Month</span>', unsafe_allow_html=True)
-        st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+        st.markdown('<span class="section-chip">📅 LCR & STL Settlements — Overview</span>', unsafe_allow_html=True)
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="background:#f1f5f9;padding:12px;border-radius:8px;border-left:4px solid #3b82f6;margin-bottom:16px;"><small>📊 <strong>Metrics show ALL settlements</strong> | 📈 <strong>Chart & table show current month only</strong></small></div>', unsafe_allow_html=True)
         
         if df_lc.empty and df_lc_paid.empty:
             st.info("No LCR & STL data.")
@@ -983,8 +984,18 @@ def main():
                 # Paid: Sum of column D where Status="CLOSED"
                 paid_amount = all_paid["amount"].sum() if not all_paid.empty else 0.0
                 
-                # Balance Due: Sum of column D where Status="PENDING" (regardless of remark)  
-                balance_due = all_pending["amount"].sum() if not all_pending.empty else 0.0
+                # Balance Due: Sum of column D where Status="PENDING" AND Remark is EMPTY
+                if not all_pending.empty:
+                    balance_due_mask = (all_pending["status"].str.upper().str.strip() == "PENDING") & \
+                                      ((all_pending["remark"].isna()) | \
+                                       (all_pending["remark"].astype(str).str.strip() == "") | \
+                                       (all_pending["remark"].astype(str).str.strip() == "-") | \
+                                       (all_pending["remark"].astype(str).str.strip().str.lower() == "nan"))
+                    balance_due = all_pending.loc[balance_due_mask, "amount"].sum()
+                    count_balance_due = len(all_pending.loc[balance_due_mask])
+                else:
+                    balance_due = 0.0
+                    count_balance_due = 0
                 
                 # Count metrics
                 count_pending = len(all_pending) if not all_pending.empty else 0
@@ -1087,9 +1098,9 @@ def main():
                 )
                 
                 # Enhanced Chart Section
-                if not lc_m.empty:
-                    lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
-                    weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
+                if not lc_m_chart.empty:
+                    lc_m_chart["week"] = lc_m_chart["settlement_date"].dt.isocalendar().week.astype(int)
+                    weekly = lc_m_chart.groupby("week", as_index=False)["amount"].sum().sort_values("week")
                     
                     chart_col1, chart_col2 = st.columns([2, 1])
                     
