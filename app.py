@@ -1,4 +1,4 @@
-# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab)
+# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab, Export LC Tab)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
 # - Comma-separated numeric formatting (with decimals where needed)
 # - Plotly toolbars hidden
@@ -6,6 +6,7 @@
 # - Exchange Rates functionality restored
 # - Added "Paid" value in LCR & STL Settlements overview
 # - Added "Reports" tab for complete Excel export
+# - Added "Export LC" tab with data from a new Excel source, including branch and date filters.
 
 import io
 import time
@@ -122,7 +123,7 @@ THEME = {
 }
 PLOTLY_CONFIG = {"displayModeBar": False, "displaylogo": False, "responsive": True}
 
-# --- Colored tabs (pure CSS) - Added FX tab styling ---
+# --- Colored tabs (pure CSS) - Added Export LC tab styling ---
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -165,6 +166,9 @@ st.markdown(f"""
   /* Reports */
   [data-testid="stTabs"] button[role="tab"]:nth-child(7) {{ background:#f3e8ff; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e9d5ff; }}
+  /* Export LC */
+  [data-testid="stTabs"] button[role="tab"]:nth-child(8) {{ background:#ffedd5; color:#0f172a; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(8) {{ background:#fed7aa; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -181,7 +185,7 @@ def create_session() -> requests.Session:
 http_session = create_session()
 
 # ----------------------------
-# Links - Exchange Rate link with correct gid
+# Links - Added Export LC link
 # ----------------------------
 LINKS = {
     "BANK BALANCE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=860709395",
@@ -190,6 +194,7 @@ LINKS = {
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
     "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
+    "EXPORT_LC": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRlG-a8RqvHK0_BJJtqRe8W7iv5Ey-dKKsaKWdyyT4OsvZnjPrTeRA0jQVFYQWEAA/pub?output=xlsx",
 }
 
 # ----------------------------
@@ -273,7 +278,7 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
     return styler
 
 # ----------------------------
-# Cached CSV fetch
+# Cached Data Fetching
 # ----------------------------
 @st.cache_data(ttl=config.CACHE_TTL)
 @rate_limit()
@@ -290,6 +295,30 @@ def read_csv(url: str) -> pd.DataFrame:
         return pd.read_csv(io.StringIO(content))
     except Exception:
         return pd.DataFrame()
+
+@st.cache_data(ttl=config.CACHE_TTL)
+@rate_limit()
+def read_excel_all_sheets(url: str) -> pd.DataFrame:
+    """Reads all sheets from an Excel file URL and combines them."""
+    try:
+        response = http_session.get(url, timeout=config.REQUEST_TIMEOUT)
+        response.raise_for_status()
+        excel_content = io.BytesIO(response.content)
+        
+        # Read all sheets from the Excel file into a dictionary of DataFrames
+        all_sheets = pd.read_excel(excel_content, sheet_name=None, engine='openpyxl')
+        
+        # Combine sheets, adding a 'branch' column from the sheet name
+        combined_df = pd.DataFrame()
+        for sheet_name, df in all_sheets.items():
+            df['branch'] = sheet_name.strip().upper()
+            combined_df = pd.concat([combined_df, df], ignore_index=True)
+        
+        return combined_df
+    except Exception as e:
+        logger.error(f"Failed to read Excel from {url}: {e}")
+        return pd.DataFrame()
+
 
 # ----------------------------
 # Display helpers
@@ -659,6 +688,46 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
         logger.error(f"Error parsing exchange rates: {e}")
         return pd.DataFrame()
 
+def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
+    """Parse and clean the combined Export LC data."""
+    try:
+        if df.empty: return pd.DataFrame()
+        
+        d = cols_lower(df)
+        
+        required_cols = ['submitted date', 'branch', 'value (sar)']
+        if not all(col in d.columns for col in required_cols):
+            logger.warning(f"Export LC sheet missing required columns. Found: {d.columns.tolist()}")
+            return pd.DataFrame()
+            
+        d = d.rename(columns={
+            'applicant': 'applicant',
+            'l/c no.': 'lc_no',
+            'issuing bank': 'issuing_bank',
+            'advising bank': 'advising_bank',
+            'reference no.': 'reference_no',
+            'benefecery branch': 'beneficiary_branch',
+            'invoice no.': 'invoice_no',
+            'submitted date': 'submitted_date',
+            'value (sar)': 'value_sar',
+            'payment term (days)': 'payment_term_days',
+            'maturity date': 'maturity_date',
+            'status': 'status',
+            'remarks': 'remarks',
+            'branch': 'branch'
+        })
+        
+        d['submitted_date'] = pd.to_datetime(d['submitted_date'], errors='coerce')
+        d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
+        d['value_sar'] = d['value_sar'].apply(_to_number)
+        
+        out = d.dropna(subset=['submitted_date', 'value_sar', 'branch'])
+        
+        return out
+    except Exception as e:
+        logger.error(f"Error parsing Export LC data: {e}")
+        return pd.DataFrame()
+
 def extract_balance_due_value(df_raw: pd.DataFrame) -> float:
     if df_raw.empty:
         return np.nan
@@ -763,7 +832,7 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
 # ----------------------------
 # Excel Export Helper
 # ----------------------------
-def generate_complete_report(df_by_bank, df_pay_approved, df_pay_released, df_lc, df_lc_paid, df_fm, df_cvp, df_fx, total_balance, approved_sum, lc_next4_sum, banks_cnt):
+def generate_complete_report(df_by_bank, df_pay_approved, df_pay_released, df_lc, df_lc_paid, df_fm, df_cvp, df_fx, df_export_lc, total_balance, approved_sum, lc_next4_sum, banks_cnt):
     """Generate a complete Excel report with multiple sheets."""
     output = io.BytesIO()
     
@@ -794,6 +863,10 @@ def generate_complete_report(df_by_bank, df_pay_approved, df_pay_released, df_lc
         # Settlements - Paid
         if not df_lc_paid.empty:
             df_lc_paid.to_excel(writer, sheet_name='Settlements Paid', index=False)
+        
+        # Export LC Proceeds
+        if not df_export_lc.empty:
+            df_export_lc.to_excel(writer, sheet_name='Export LC Proceeds', index=False)
         
         # Fund Movement
         if not df_fm.empty:
@@ -841,9 +914,12 @@ def main():
     df_cvp_raw = read_csv(LINKS["COLLECTION_BRANCH"])
     df_cvp = parse_branch_cvp(df_cvp_raw)
 
-    # Load exchange rates data
     df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
     df_fx = parse_exchange_rates(df_fx_raw)
+    
+    # Load new Export LC data
+    df_export_lc_raw = read_excel_all_sheets(LINKS["EXPORT_LC"])
+    df_export_lc = parse_export_lc(df_export_lc_raw)
 
     # KPIs
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
@@ -905,10 +981,10 @@ def main():
     st.markdown("---")
 
     # =========================
-    # TABS (FX restored, Reports added)
+    # TABS (Added Export LC)
     # =========================
-    tab_overview, tab_bank, tab_settlements, tab_payments, tab_fx, tab_facility, tab_reports = st.tabs(
-        ["Overview", "Bank", "Settlements", "Supplier Payments", "Exchange Rates", "Facility Report", "Reports"]
+    tab_overview, tab_bank, tab_settlements, tab_payments, tab_fx, tab_facility, tab_reports, tab_export_lc = st.tabs(
+        ["Overview", "Bank", "Settlements", "Supplier Payments", "Exchange Rates", "Facility Report", "Reports", "Export LC"]
     )
 
     # ---- Overview tab ----
@@ -1808,7 +1884,7 @@ def main():
         # Intentionally no placeholder text (per preference)
         pass
 
-    # ---- Reports tab (new) ----
+    # ---- Reports tab ----
     with tab_reports:
         st.markdown('<span class="section-chip">📊 Complete Report Export</span>', unsafe_allow_html=True)
         st.info("Download a complete Excel report containing all dashboard data across multiple sheets.")
@@ -1816,7 +1892,8 @@ def main():
         # Generate and download button
         excel_data = generate_complete_report(
             df_by_bank, df_pay_approved, df_pay_released, df_lc, df_lc_paid, 
-            df_fm, df_cvp, df_fx, total_balance, approved_sum, lc_next4_sum, banks_cnt
+            df_fm, df_cvp, df_fx, df_export_lc, 
+            total_balance, approved_sum, lc_next4_sum, banks_cnt
         )
         
         st.download_button(
@@ -1827,6 +1904,69 @@ def main():
             use_container_width=True,
             type="primary"
         )
+    
+    # ---- Export LC tab (new) ----
+    with tab_export_lc:
+        st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
+        if df_export_lc.empty:
+            st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
+        else:
+            # Create filters
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                branches = sorted(df_export_lc["branch"].unique())
+                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches)
+            with c2:
+                min_date = df_export_lc["submitted_date"].min().date()
+                start_date_filter = st.date_input("From Submitted Date", value=min_date)
+            with c3:
+                max_date = df_export_lc["submitted_date"].max().date()
+                end_date_filter = st.date_input("To Submitted Date", value=max_date)
+
+            # Apply filters
+            filtered_df = df_export_lc[
+                (df_export_lc["branch"].isin(selected_branches)) &
+                (df_export_lc["submitted_date"].dt.date >= start_date_filter) &
+                (df_export_lc["submitted_date"].dt.date <= end_date_filter)
+            ].copy()
+
+            # Display metrics
+            st.markdown("---")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Value (SAR)", fmt_number_only(filtered_df['value_sar'].sum()))
+            m2.metric("Total LCs", len(filtered_df))
+            m3.metric("Average Value (SAR)", fmt_number_only(filtered_df['value_sar'].mean()))
+
+            # Display table
+            st.markdown("#### Detailed View")
+            display_cols = {
+                'branch': 'Branch',
+                'applicant': 'Applicant',
+                'lc_no': 'LC No.',
+                'issuing_bank': 'Issuing Bank',
+                'submitted_date': 'Submitted Date',
+                'maturity_date': 'Maturity Date',
+                'value_sar': 'Value (SAR)',
+                'status': 'Status',
+                'remarks': 'Remarks'
+            }
+            
+            cols_to_show = {k: v for k, v in display_cols.items() if k in filtered_df.columns}
+            
+            table_view = filtered_df[list(cols_to_show.keys())].rename(columns=cols_to_show)
+            
+            # Safely format date columns
+            if 'Submitted Date' in table_view.columns:
+                table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
+            if 'Maturity Date' in table_view.columns:
+                 table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
+            
+            st.dataframe(
+                style_right(table_view, num_cols=['Value (SAR)']), 
+                use_container_width=True, 
+                height=500
+            )
+
 
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
