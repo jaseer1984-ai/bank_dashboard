@@ -1,36 +1,10 @@
-Of course. Here is the complete, final code for your Treasury Dashboard.
-
-This version includes all the features you've requested: the "Reports" tab for Excel export, the fix for the `SyntaxError`, and it is the code you need to run after fixing the `ModuleNotFoundError`.
-
-### **Important Reminder**
-
-Before running the code, you **must** update your `requirements.txt` file to include the `openpyxl` library. This will fix the `ModuleNotFoundError` you saw in the screenshot.
-
-Your **`requirements.txt`** file should look like this:
-
-```text
-streamlit
-pandas
-requests
-numpy
-openpyxl
-```
-
-After updating that file and rebooting your app, the following Python code will work correctly.
-
----
-
-### **Full Code (`app.py`)**
-
-```python
-# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab)
+# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
 # - Comma-separated numeric formatting (with decimals where needed)
 # - Plotly toolbars hidden
 # - Colored tabs via CSS (no Streamlit tab code changes needed)
 # - Exchange Rates functionality restored
 # - Added "Paid" value in LCR & STL Settlements overview
-# - Added "Reports" tab for complete Excel export
 
 import io
 import time
@@ -187,9 +161,6 @@ st.markdown(f"""
   /* Facility Report */
   [data-testid="stTabs"] button[role="tab"]:nth-child(6) {{ background:#f1f5f9; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(6) {{ background:#e2e8f0; }}
-  /* Reports */
-  [data-testid="stTabs"] button[role="tab"]:nth-child(7) {{ background:#f3e8ff; color:#0f172a; }}
-  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e9d5ff; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -786,56 +757,6 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
         st.session_state["compact_density"] = density
 
 # ----------------------------
-# Excel Export Helper
-# ----------------------------
-def generate_complete_report(df_by_bank, df_pay_approved, df_pay_released, df_lc, df_lc_paid, df_fm, df_cvp, df_fx, total_balance, approved_sum, lc_next4_sum, banks_cnt):
-    """Generate a complete Excel report with multiple sheets."""
-    output = io.BytesIO()
-    
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Summary Sheet
-        summary_data = pd.DataFrame({
-            'Metric': ['Total Balance', 'Approved Payments', 'LCR & STL Due (Next 4 Days)', 'Active Banks'],
-            'Value': [total_balance, approved_sum, lc_next4_sum, banks_cnt]
-        })
-        summary_data.to_excel(writer, sheet_name='Summary KPIs', index=False)
-        
-        # Bank Balances
-        if not df_by_bank.empty:
-            df_by_bank.to_excel(writer, sheet_name='Bank Balances', index=False)
-        
-        # Supplier Payments - Approved
-        if not df_pay_approved.empty:
-            df_pay_approved.to_excel(writer, sheet_name='Supplier Payments Approved', index=False)
-        
-        # Supplier Payments - Released
-        if not df_pay_released.empty:
-            df_pay_released.to_excel(writer, sheet_name='Supplier Payments Released', index=False)
-        
-        # Settlements - Pending
-        if not df_lc.empty:
-            df_lc.to_excel(writer, sheet_name='Settlements Pending', index=False)
-        
-        # Settlements - Paid
-        if not df_lc_paid.empty:
-            df_lc_paid.to_excel(writer, sheet_name='Settlements Paid', index=False)
-        
-        # Fund Movement
-        if not df_fm.empty:
-            df_fm.to_excel(writer, sheet_name='Fund Movement', index=False)
-        
-        # Branch CVP
-        if not df_cvp.empty:
-            df_cvp.to_excel(writer, sheet_name='Branch CVP', index=False)
-        
-        # Exchange Rates
-        if not df_fx.empty:
-            df_fx.to_excel(writer, sheet_name='Exchange Rates', index=False)
-    
-    processed_data = output.getvalue()
-    return processed_data
-
-# ----------------------------
 # Main
 # ----------------------------
 def main():
@@ -930,10 +851,10 @@ def main():
     st.markdown("---")
 
     # =========================
-    # TABS (FX restored, Reports added)
+    # TABS (FX restored)
     # =========================
-    tab_overview, tab_bank, tab_settlements, tab_payments, tab_fx, tab_facility, tab_reports = st.tabs(
-        ["Overview", "Bank", "Settlements", "Supplier Payments", "Exchange Rates", "Facility Report", "Reports"]
+    tab_overview, tab_bank, tab_settlements, tab_payments, tab_fx, tab_facility = st.tabs(
+        ["Overview", "Bank", "Settlements", "Supplier Payments", "Exchange Rates", "Facility Report"]
     )
 
     # ---- Overview tab ----
@@ -1833,26 +1754,6 @@ def main():
         # Intentionally no placeholder text (per preference)
         pass
 
-    # ---- Reports tab (new) ----
-    with tab_reports:
-        st.markdown('<span class="section-chip">📊 Complete Report Export</span>', unsafe_allow_html=True)
-        st.info("Download a complete Excel report containing all dashboard data across multiple sheets.")
-        
-        # Generate and download button
-        excel_data = generate_complete_report(
-            df_by_bank, df_pay_approved, df_pay_released, df_lc, df_lc_paid, 
-            df_fm, df_cvp, df_fx, total_balance, approved_sum, lc_next4_sum, banks_cnt
-        )
-        
-        st.download_button(
-            label="📥 Download Complete Treasury Report.xlsx",
-            data=excel_data,
-            file_name=f"Treasury_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary"
-        )
-
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
 
@@ -1864,4 +1765,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
