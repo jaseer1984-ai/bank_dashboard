@@ -7,6 +7,8 @@
 # - Added "Paid" value in LCR & STL Settlements overview
 # - Added "Reports" tab for complete Excel export
 # - Added "Export LC" tab with data from a new Excel source, including branch and date filters.
+# - Sidebar cleaned up (Controls/Theme hidden) and new "Accepted Export LC" KPI added.
+# - "Export LC" tab moved after "Supplier Payments" and a "Status" filter added.
 
 import io
 import time
@@ -123,7 +125,7 @@ THEME = {
 }
 PLOTLY_CONFIG = {"displayModeBar": False, "displaylogo": False, "responsive": True}
 
-# --- Colored tabs (pure CSS) - Added Export LC tab styling ---
+# --- Colored tabs (pure CSS) - Updated for new tab order ---
 st.markdown(f"""
 <style>
   .top-gradient {{
@@ -157,18 +159,18 @@ st.markdown(f"""
   /* Supplier Payments */
   [data-testid="stTabs"] button[role="tab"]:nth-child(4) {{ background:#dcfce7; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(4) {{ background:#bbf7d0; }}
-  /* Exchange Rates */
-  [data-testid="stTabs"] button[role="tab"]:nth-child(5) {{ background:#fef3c7; color:#0f172a; }}
-  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(5) {{ background:#fde68a; }}
-  /* Facility Report */
-  [data-testid="stTabs"] button[role="tab"]:nth-child(6) {{ background:#f1f5f9; color:#0f172a; }}
-  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(6) {{ background:#e2e8f0; }}
-  /* Reports */
-  [data-testid="stTabs"] button[role="tab"]:nth-child(7) {{ background:#f3e8ff; color:#0f172a; }}
-  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e9d5ff; }}
-  /* Export LC */
-  [data-testid="stTabs"] button[role="tab"]:nth-child(8) {{ background:#ffedd5; color:#0f172a; }}
-  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(8) {{ background:#fed7aa; }}
+  /* Export LC (now 5th) */
+  [data-testid="stTabs"] button[role="tab"]:nth-child(5) {{ background:#ffedd5; color:#0f172a; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(5) {{ background:#fed7aa; }}
+  /* Exchange Rates (now 6th) */
+  [data-testid="stTabs"] button[role="tab"]:nth-child(6) {{ background:#fef3c7; color:#0f172a; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(6) {{ background:#fde68a; }}
+  /* Facility Report (now 7th) */
+  [data-testid="stTabs"] button[role="tab"]:nth-child(7) {{ background:#f1f5f9; color:#0f172a; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e2e8f0; }}
+  /* Reports (now 8th) */
+  [data-testid="stTabs"] button[role="tab"]:nth-child(8) {{ background:#f3e8ff; color:#0f172a; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(8) {{ background:#e9d5ff; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -778,20 +780,12 @@ def render_header():
 # ----------------------------
 # Sidebar
 # ----------------------------
-def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=True):
+def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks_cnt, accepted_export_lc_sum):
     with st.sidebar:
         st.markdown("### 🔄 Refresh")
         if st.button("Refresh Now", type="primary", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-
-        # FX toggle restored
-        if show_fx:
-            st.markdown("### 💱 Exchange Rates")
-            fx_enabled = st.toggle("Show FX Data", 
-                                 value=st.session_state.get("show_fx", True),
-                                 help="Toggle exchange rate information")
-            st.session_state["show_fx"] = fx_enabled
 
         st.markdown("### 📊 Key Metrics")
         def _kpi(title, value, bg, border, color):
@@ -807,27 +801,8 @@ def render_sidebar(data_status, total_balance, approved_sum, lc_next4_sum, banks
         _kpi("TOTAL BALANCE", total_balance, THEME["heading_bg"], THEME["accent1"], "#1E3A8A")
         _kpi("APPROVED PAYMENTS", approved_sum, THEME["heading_bg"], THEME["accent2"], "#065F46")
         _kpi("LCR & STL DUE (NEXT 4 DAYS)", lc_next4_sum, THEME["heading_bg"], THEME["accent1"], "#92400E")
-        _kpi("ACTIVE BANKS", banks_cnt, THEME["heading_bg"], THEME["accent2"], "#9F1239")
-
-        st.markdown("---")
-        st.markdown("### ⚙️ Controls")
-        do_auto = st.toggle("Auto refresh",
-                            value=st.session_state.get("auto_refresh", False),
-                            help="Automatically refresh the dashboard.")
-        every_sec = st.number_input("Every (seconds)", min_value=15, max_value=900,
-                                    value=int(st.session_state.get("auto_interval", 120)), step=15)
-        st.session_state["auto_refresh"] = bool(do_auto)
-        st.session_state["auto_interval"] = int(every_sec)
-
-        st.markdown("### 🎨 Theme")
-        sel = st.selectbox("Palette", list(PALETTES.keys()),
-                           index=list(PALETTES.keys()).index(st.session_state["palette_name"]))
-        if sel != st.session_state["palette_name"]:
-            st.session_state["palette_name"] = sel
-            st.rerun()
-
-        density = st.toggle("Compact density", value=st.session_state.get("compact_density", False))
-        st.session_state["compact_density"] = density
+        _kpi("ACCEPTED EXPORT LC", accepted_export_lc_sum, THEME["heading_bg"], THEME["accent2"], "#4338CA")
+        _kpi("ACTIVE BANKS", banks_cnt, THEME["heading_bg"], THEME["accent1"], "#9F1239")
 
 # ----------------------------
 # Excel Export Helper
@@ -931,9 +906,15 @@ def main():
     next4 = today0 + pd.Timedelta(days=3)
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0
+    
+    # New KPI: Accepted Export LC Sum
+    accepted_export_lc_sum = 0.0
+    if not df_export_lc.empty and 'status' in df_export_lc.columns:
+        mask = df_export_lc['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
+        accepted_export_lc_sum = float(df_export_lc.loc[mask, 'value_sar'].sum())
 
     # Sidebar
-    render_sidebar({}, total_balance, approved_sum, lc_next4_sum, banks_cnt, show_fx=False)
+    render_sidebar({}, total_balance, approved_sum, lc_next4_sum, banks_cnt, accepted_export_lc_sum)
     # Density tokens
     pad = "12px" if st.session_state.get("compact_density", False) else "20px"
     radius = "10px" if st.session_state.get("compact_density", False) else "12px"
@@ -981,10 +962,10 @@ def main():
     st.markdown("---")
 
     # =========================
-    # TABS (Added Export LC)
+    # TABS (Reordered)
     # =========================
-    tab_overview, tab_bank, tab_settlements, tab_payments, tab_fx, tab_facility, tab_reports, tab_export_lc = st.tabs(
-        ["Overview", "Bank", "Settlements", "Supplier Payments", "Exchange Rates", "Facility Report", "Reports", "Export LC"]
+    tab_overview, tab_bank, tab_settlements, tab_payments, tab_export_lc, tab_fx, tab_facility, tab_reports = st.tabs(
+        ["Overview", "Bank", "Settlements", "Supplier Payments", "Export LC", "Exchange Rates", "Facility Report", "Reports"]
     )
 
     # ---- Overview tab ----
@@ -1618,7 +1599,80 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Exchange Rates tab (restored) ----
+    # ---- Export LC tab (new position, new filter) ----
+    with tab_export_lc:
+        st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
+        if df_export_lc.empty:
+            st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
+        else:
+            # Create filters
+            col1, col2 = st.columns(2)
+            with col1:
+                branches = sorted(df_export_lc["branch"].unique())
+                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches)
+                
+                if 'status' in df_export_lc.columns:
+                    statuses = sorted(df_export_lc["status"].dropna().astype(str).unique())
+                    selected_statuses = st.multiselect("Filter by Status", options=statuses, default=statuses)
+                else:
+                    selected_statuses = []
+
+            with col2:
+                min_date = df_export_lc["submitted_date"].min().date()
+                start_date_filter = st.date_input("From Submitted Date", value=min_date)
+                end_date_filter = st.date_input("To Submitted Date", value=df_export_lc["submitted_date"].max().date())
+
+            # Apply filters
+            filtered_df = df_export_lc[
+                (df_export_lc["branch"].isin(selected_branches)) &
+                (df_export_lc["submitted_date"].dt.date >= start_date_filter) &
+                (df_export_lc["submitted_date"].dt.date <= end_date_filter)
+            ]
+            
+            # Conditionally apply status filter
+            if 'status' in filtered_df.columns and selected_statuses:
+                filtered_df = filtered_df[filtered_df["status"].isin(selected_statuses)]
+            
+            filtered_df = filtered_df.copy()
+
+            # Display metrics
+            st.markdown("---")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Value (SAR)", fmt_number_only(filtered_df['value_sar'].sum()))
+            m2.metric("Total LCs", len(filtered_df))
+            m3.metric("Average Value (SAR)", fmt_number_only(filtered_df['value_sar'].mean()))
+
+            # Display table
+            st.markdown("#### Detailed View")
+            display_cols = {
+                'branch': 'Branch',
+                'applicant': 'Applicant',
+                'lc_no': 'LC No.',
+                'issuing_bank': 'Issuing Bank',
+                'submitted_date': 'Submitted Date',
+                'maturity_date': 'Maturity Date',
+                'value_sar': 'Value (SAR)',
+                'status': 'Status',
+                'remarks': 'Remarks'
+            }
+            
+            cols_to_show = {k: v for k, v in display_cols.items() if k in filtered_df.columns}
+            
+            table_view = filtered_df[list(cols_to_show.keys())].rename(columns=cols_to_show)
+            
+            # Safely format date columns
+            if 'Submitted Date' in table_view.columns:
+                table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
+            if 'Maturity Date' in table_view.columns:
+                 table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
+            
+            st.dataframe(
+                style_right(table_view, num_cols=['Value (SAR)']), 
+                use_container_width=True, 
+                height=500
+            )
+
+    # ---- Exchange Rates tab ----
     with tab_fx:
         st.markdown('<span class="section-chip">💱 Exchange Rates</span>', unsafe_allow_html=True)
         
@@ -1904,69 +1958,6 @@ def main():
             use_container_width=True,
             type="primary"
         )
-    
-    # ---- Export LC tab (new) ----
-    with tab_export_lc:
-        st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
-        if df_export_lc.empty:
-            st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
-        else:
-            # Create filters
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                branches = sorted(df_export_lc["branch"].unique())
-                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches)
-            with c2:
-                min_date = df_export_lc["submitted_date"].min().date()
-                start_date_filter = st.date_input("From Submitted Date", value=min_date)
-            with c3:
-                max_date = df_export_lc["submitted_date"].max().date()
-                end_date_filter = st.date_input("To Submitted Date", value=max_date)
-
-            # Apply filters
-            filtered_df = df_export_lc[
-                (df_export_lc["branch"].isin(selected_branches)) &
-                (df_export_lc["submitted_date"].dt.date >= start_date_filter) &
-                (df_export_lc["submitted_date"].dt.date <= end_date_filter)
-            ].copy()
-
-            # Display metrics
-            st.markdown("---")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Value (SAR)", fmt_number_only(filtered_df['value_sar'].sum()))
-            m2.metric("Total LCs", len(filtered_df))
-            m3.metric("Average Value (SAR)", fmt_number_only(filtered_df['value_sar'].mean()))
-
-            # Display table
-            st.markdown("#### Detailed View")
-            display_cols = {
-                'branch': 'Branch',
-                'applicant': 'Applicant',
-                'lc_no': 'LC No.',
-                'issuing_bank': 'Issuing Bank',
-                'submitted_date': 'Submitted Date',
-                'maturity_date': 'Maturity Date',
-                'value_sar': 'Value (SAR)',
-                'status': 'Status',
-                'remarks': 'Remarks'
-            }
-            
-            cols_to_show = {k: v for k, v in display_cols.items() if k in filtered_df.columns}
-            
-            table_view = filtered_df[list(cols_to_show.keys())].rename(columns=cols_to_show)
-            
-            # Safely format date columns
-            if 'Submitted Date' in table_view.columns:
-                table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
-            if 'Maturity Date' in table_view.columns:
-                 table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
-            
-            st.dataframe(
-                style_right(table_view, num_cols=['Value (SAR)']), 
-                use_container_width=True, 
-                height=500
-            )
-
 
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
