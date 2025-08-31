@@ -9,6 +9,8 @@
 # - Added "Export LC" tab with data from a new Excel source, including branch and date filters.
 # - Sidebar cleaned up (Controls/Theme hidden) and new "Accepted Export LC" KPI added.
 # - "Export LC" tab moved after "Supplier Payments" and a "Status" filter added.
+# - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
+# - Fixed bug where tab focus jumped on filter change by adding stable keys.
 
 import io
 import time
@@ -723,7 +725,8 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
         d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
         d['value_sar'] = d['value_sar'].apply(_to_number)
         
-        out = d.dropna(subset=['submitted_date', 'value_sar', 'branch'])
+        # MODIFICATION: Do not drop rows with missing dates, only essential values
+        out = d.dropna(subset=['value_sar', 'branch'])
         
         return out
     except Exception as e:
@@ -1609,32 +1612,30 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 branches = sorted(df_export_lc["branch"].unique())
-                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches)
+                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
                 
                 if 'status' in df_export_lc.columns:
                     statuses = sorted(df_export_lc["status"].dropna().astype(str).unique())
-                    selected_statuses = st.multiselect("Filter by Status", options=statuses, default=statuses)
+                    selected_statuses = st.multiselect("Filter by Status", options=statuses, default=statuses, key="export_lc_status_filter")
                 else:
                     selected_statuses = []
 
             with col2:
                 min_date = df_export_lc["submitted_date"].min().date()
-                start_date_filter = st.date_input("From Submitted Date", value=min_date)
-                end_date_filter = st.date_input("To Submitted Date", value=df_export_lc["submitted_date"].max().date())
+                start_date_filter = st.date_input("From Submitted Date", value=min_date, key="export_lc_start_date")
+                end_date_filter = st.date_input("To Submitted Date", value=df_export_lc["submitted_date"].max().date(), key="export_lc_end_date")
 
-            # Apply filters
-            filtered_df = df_export_lc[
-                (df_export_lc["branch"].isin(selected_branches)) &
-                (df_export_lc["submitted_date"].dt.date >= start_date_filter) &
-                (df_export_lc["submitted_date"].dt.date <= end_date_filter)
-            ]
+            # Apply branch and status filters first
+            filtered_df = df_export_lc[df_export_lc["branch"].isin(selected_branches)]
             
-            # Conditionally apply status filter
             if 'status' in filtered_df.columns and selected_statuses:
                 filtered_df = filtered_df[filtered_df["status"].isin(selected_statuses)]
-            
-            filtered_df = filtered_df.copy()
 
+            # MODIFICATION: Apply date filter while keeping rows with no date
+            date_mask = (filtered_df["submitted_date"].dt.date >= start_date_filter) & (filtered_df["submitted_date"].dt.date <= end_date_filter)
+            no_date_mask = filtered_df["submitted_date"].isna()
+            filtered_df = filtered_df[date_mask | no_date_mask].copy()
+            
             # Display metrics
             st.markdown("---")
             m1, m2, m3 = st.columns(3)
