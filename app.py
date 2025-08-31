@@ -117,7 +117,7 @@ THEME = {
         "ok": ACTIVE["card_ok"], "low": ACTIVE["card_low"], "neg": ACTIVE["card_neg"],
     },
     "badge": {"pos_bg": "rgba(5,150,105,.10)", "neg_bg": "rgba(185,28,28,.10)"},
-    "icons": {"best": "💎", "good": "🔹", "ok": "💠", "low": "💚", "neg": ⚠️"},
+    "icons": {"best": "💎", "good": "🔹", "ok": "💠", "low": "💚", "neg": "⚠️"},
     "thresholds": {"best": 500_000, "good": 100_000, "ok": 50_000},
 }
 PLOTLY_CONFIG = {"displayModeBar": False, "displaylogo": False, "responsive": True}
