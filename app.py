@@ -1,4 +1,3 @@
-```python
 # -*- coding: utf-8 -*-
 # app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab, Export LC Tab)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
@@ -1891,3 +1890,4 @@ def main():
 if __name__ == "__main__":
     main()
 ```
+
