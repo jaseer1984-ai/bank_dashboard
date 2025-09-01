@@ -1530,23 +1530,6 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Export LC tab (updated: status tabs, issuing bank filter, L/C No + Advising Bank in table) ----
-Perfect ✅ thanks for clarifying!  
-We’ll make **two small but important adjustments** inside the **Export LC tab** section (`with tab_export_lc:`):
-
-### 1. Change filter dropdown:
-👉 Replace **"Issuing Bank"** filter with **"Advising Bank"** filter.
-
-### 2. Metric card adjustment:
-👉 Remove **"Total LCs" count metric**.  
-👉 Show instead: **Accepted LC total (sum of SAR values) for current month based on maturity date**.  
-- It will check all rows where `status == "ACCEPTED"` and `maturity_date` falls within the **current month**, then sum `value_sar`.  
-
----
-
-Here is the corrected snippet (only the **Export LC tab section** changed):
-
-```python
     # ---- Export LC tab (updated: advising bank filter, accepted MTD maturity sum KPI) ----
     with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
@@ -1918,4 +1901,5 @@ Here is the corrected snippet (only the **Export LC tab section** changed):
 
 if __name__ == "__main__":
     main()
+
 
