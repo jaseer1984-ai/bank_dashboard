@@ -1,16 +1,3 @@
-Thanks for flagging that. The Settlements tab went blank because the date parsing and column detection in parse_settlements were too strict (it excluded “NEW MATURITY DATE” and didn’t use day-first). I’ve fixed that and also made the status handling more robust.
-
-Below is the complete app.py with:
-- Supplier Payments parser fixed (no .str.trim bug, no NaN text in tables).
-- Settlements parser updated:
-  - Day-first date parsing (DD-MM-YYYY).
-  - More robust date column detection (handles “NEW MATURITY DATE”, “DUE DATE”, etc.).
-  - Status normalization (PAID, CLOSED, COLLECTED, SETTLED → CLOSED; PENDING/OPEN/DUE/blank → PENDING).
-- Export LC tab as requested earlier (Advising Bank filter, Status tabs, day-first parsing, DD-MM-YYYY in table, correct “Accepted (Maturity in current month)” KPI).
-
-Copy-paste this entire file.
-
-```python
 # -*- coding: utf-8 -*-
 # app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab, Export LC Tab)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
@@ -1582,6 +1569,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
+
 
 If the Settlements sheet uses a specific header like “NEW MATURITY DATE” only, the new parser now picks it up and parses dates day-first, so rows aren’t dropped. If you still see empty data, please share the exact header names for date and amount columns from the Settlements sheet, and I’ll tailor the detection rules further.
+
