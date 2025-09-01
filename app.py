@@ -20,6 +20,7 @@
 #   • Bank Balance: robust parser with fallback (tab won’t disappear)
 #   • Tables: remove “NAN/NaN/nan/None/null/NaT/NA/N/A” placeholders from display
 #   • Bank Balance card: negative Available and After Settlement values highlighted in red
+#   • Overview > LCR & STL Settlements KPIs restored to gradient card model
 
 import io
 import time
@@ -135,21 +136,35 @@ st.markdown(f"""
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
   }}
-  [data-testid="stTabs"] button[role="tab"] {{ border-radius: 8px !important; margin-right: 6px !important; font-weight: 700 !important; }}
+
+  /* Streamlit tabs colorization (index-based styling) */
+  [data-testid="stTabs"] button[role="tab"] {{
+    border-radius: 8px !important;
+    margin-right: 6px !important;
+    font-weight: 700 !important;
+  }}
+  /* Overview */
   [data-testid="stTabs"] button[role="tab"]:nth-child(1) {{ background:#e0e7ff; color:#1e293b; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(1) {{ background:#c7d2fe; }}
+  /* Bank */
   [data-testid="stTabs"] button[role="tab"]:nth-child(2) {{ background:#ccfbf1; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(2) {{ background:#99f6e4; }}
+  /* Settlements */
   [data-testid="stTabs"] button[role="tab"]:nth-child(3) {{ background:#e0f2fe; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(3) {{ background:#bae6fd; }}
+  /* Supplier Payments */
   [data-testid="stTabs"] button[role="tab"]:nth-child(4) {{ background:#dcfce7; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(4) {{ background:#bbf7d0; }}
+  /* Export LC (now 5th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(5) {{ background:#ffedd5; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(5) {{ background:#fed7aa; }}
+  /* Exchange Rates (now 6th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(6) {{ background:#fef3c7; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(6) {{ background:#fde68a; }}
+  /* Facility Report (now 7th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(7) {{ background:#f1f5f9; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e2e8f0; }}
+  /* Reports (now 8th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(8) {{ background:#f3e8ff; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(8) {{ background:#e9d5ff; }}
 </style>
@@ -592,16 +607,11 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
                 rate_val = _to_number(row[curr_col])
                 if pd.notna(rate_val) and rate_val > 0:
                     currency_pair = f"{curr_col.upper()}/SAR"
-                    result_rows.append({
-                        "currency_pair": currency_pair,
-                        "rate": rate_val,
-                        "date": date_val
-                    })
+                    result_rows.append({"currency_pair": currency_pair, "rate": rate_val, "date": date_val})
         if not result_rows:
             return pd.DataFrame()
-        out = pd.DataFrame(result_rows)
+        out = pd.DataFrame(result_rows).sort_values(["currency_pair", "date"])
         if len(out) > 1:
-            out = out.sort_values(["currency_pair", "date"])
             out["prev_rate"] = out.groupby("currency_pair")["rate"].shift(1)
             out["change"] = out["rate"] - out["prev_rate"] 
             out["change_pct"] = (out["change"] / out["prev_rate"]) * 100
@@ -643,8 +653,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'remarks': 'remarks',
             'branch': 'branch'
         }
-        if lc_no_col:
-            rename_map[lc_no_col] = 'lc_no'
+        if lc_no_col: rename_map[lc_no_col] = 'lc_no'
 
         d = d.rename(columns=rename_map)
 
@@ -805,7 +814,6 @@ def main():
     df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
     df_fx = parse_exchange_rates(df_fx_raw)
     
-    # Load Export LC data
     df_export_lc_raw = read_excel_all_sheets(LINKS["EXPORT_LC"])
     df_export_lc = parse_export_lc(df_export_lc_raw)
 
@@ -890,6 +898,7 @@ def main():
 
         st.markdown('<span class="section-chip">📅 Month-to-Date — Detailed Insights</span>', unsafe_allow_html=True)
 
+        # Liquidity MTD
         c1, c2 = st.columns([3, 2])
         with c1:
             st.subheader("Total Liquidity — MTD")
@@ -950,10 +959,11 @@ def main():
 
         st.markdown("---")
 
+        # LCR & STL Settlements — Overview (CARD MODEL RESTORED)
         st.markdown('<span class="section-chip">📅 LCR & STL Settlements — Overview</span>', unsafe_allow_html=True)
         st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
         st.markdown('<div style="background:#f1f5f9;padding:12px;border-radius:8px;border-left:4px solid #3b82f6;margin-bottom:16px;"><small>📊 <strong>Metrics show ALL settlements</strong> | 📈 <strong>Chart & table show current month only</strong></small></div>', unsafe_allow_html=True)
-        
+
         if df_lc.empty and df_lc_paid.empty:
             st.info("No LCR & STL data.")
         else:
@@ -972,14 +982,62 @@ def main():
                 if not all_pending.empty:
                     empty = all_pending["remark"].astype(str).str.strip().replace({"-":"","nan":""}).eq("")
                     balance_due = all_pending.loc[(all_pending["status"]=="PENDING") & empty, "amount"].sum()
-                completion_rate = (paid_amount / total_due * 100) if total_due > 0 else 0
 
                 col1, col2, col3, col4 = st.columns(4)
-                with col1: st.metric("Total Due", fmt_number_only(total_due))
-                with col2: st.metric("Current Due", fmt_number_only(current_due))
-                with col3: st.metric("Paid", fmt_number_only(paid_amount))
-                with col4: st.metric("Balance Due", fmt_number_only(balance_due))
+                with col1:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #f3e8ff 0%, #faf5ff 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #7c3aed;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(124,58,237,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">💰</div>
+                            <div style="font-size:14px;color:#581c87;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Total Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#581c87;margin-bottom:8px;">{fmt_number_only(total_due)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                with col2:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #fee2e2 0%, #fef2f2 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #dc2626;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(220,38,38,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">⚠️</div>
+                            <div style="font-size:14px;color:#7f1d1d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Current Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#7f1d1d;margin-bottom:8px;">{fmt_number_only(current_due)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                with col3:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #16a34a;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(22,163,74,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">✅</div>
+                            <div style="font-size:14px;color:#14532d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Paid</div>
+                            <div style="font-size:28px;font-weight:900;color:#14532d;margin-bottom:8px;">{fmt_number_only(paid_amount)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                with col4:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #d97706;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(217,119,6,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">📋</div>
+                            <div style="font-size:14px;color:#92400e;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Balance Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#92400e;margin-bottom:8px;">{fmt_number_only(balance_due)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
+                # Weekly chart for current month
                 if not lc_m.empty:
                     lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
                     weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
@@ -990,6 +1048,7 @@ def main():
 
         st.markdown("---")
 
+        # FX MTD section
         if st.session_state.get("show_fx", True) and not df_fx.empty:
             st.subheader("Exchange Rates — Month Overview")
             fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy()
@@ -1008,6 +1067,7 @@ def main():
             else:
                 st.info("No FX data for current month.")
 
+        # Export LC summary by branch
         st.markdown('<span class="section-chip">🚢 Export LC — Summary by Branch</span>', unsafe_allow_html=True)
         try:
             if df_export_lc.empty:
