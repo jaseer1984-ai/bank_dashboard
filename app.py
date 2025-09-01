@@ -491,29 +491,57 @@ def parse_bank_balance(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[datetim
     return pd.DataFrame(), None
 
 def parse_supplier_payments(df: pd.DataFrame) -> pd.DataFrame:
+    """Robust parser for Supplier Payments; fixes missing data and NaN issues."""
     try:
         d = cols_lower(df).rename(
-            columns={"supplier name": "supplier",
-                     "amount(sar)": "amount_sar",
-                     "order/sh/branch": "order_branch"}
+            columns={
+                "supplier name": "supplier",
+                "order/sh/branch": "order_branch",
+                "amount(sar)": "amount_sar",
+                "amount (sar)": "amount_sar",
+            }
         )
+        # detect 'bank' column (robust)
+        if "bank" not in d.columns:
+            bank_col = next((c for c in d.columns if c.strip().lower() == "bank"), None)
+            if bank_col:
+                d = d.rename(columns={bank_col: "bank"})
+
+        # detect status column (must exist)
+        if "status" not in d.columns:
+            status_col = next((c for c in d.columns if "status" in c), None)
+            if status_col: d = d.rename(columns={status_col: "status"})
+
         if not validate_dataframe(d, ["bank", "status"], "Supplier Payments"):
             return pd.DataFrame()
 
-        amt_col = next((c for c in ["amount_sar", "amount", "amount(sar)"] if c in d.columns), None)
-        if not amt_col: return pd.DataFrame()
+        # amount column detection
+        amt_col = None
+        for c in ["amount_sar", "amount (sar)", "amount", "value", "payment amount", "total"]:
+            if c in d.columns:
+                amt_col = c
+                break
+        if amt_col is None:
+            # last resort: first numeric-like column
+            for c in d.columns:
+                if pd.api.types.is_numeric_dtype(pd.to_numeric(d[c], errors="ignore")):
+                    amt_col = c
+                    break
+        if amt_col is None:
+            return pd.DataFrame()
 
         out = pd.DataFrame({
-            "bank": d["bank"].astype(str).str.trim().str.strip() if 'bank' in d else "",
-            "supplier": d.get("supplier", ""),
-            "currency": d.get("currency", ""),
-            "amount": d[amt_col].map(_to_number),
-            "status": d["status"].astype(str).str.strip().str.title()
+            "bank": d["bank"].astype(str).str.strip(),
+            "supplier": d.get("supplier", pd.Series("", index=d.index)).astype(str).str.strip(),
+            "currency": d.get("currency", pd.Series("", index=d.index)).astype(str).str.strip(),
+            "amount": pd.to_numeric(d[amt_col].astype(str).str.replace(",", ""), errors="coerce"),
+            "status": d["status"].astype(str).str.strip()
         })
         out = out.dropna(subset=["amount"])
         out = out[out["bank"].ne("")]
         return out
-    except Exception:
+    except Exception as e:
+        logger.error(f"parse_supplier_payments error: {e}")
         return pd.DataFrame()
 
 def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -526,7 +554,6 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                    next((c for c in d.columns if "due" in c and "date" in c), None) or \
                    next((c for c in d.columns if c.strip().lower() == "date"), None)
 
-        # Amount + Status
         amount_col = None
         status_col = None
         for col in d.columns:
@@ -540,6 +567,7 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                          next((c for c in d.columns if "balance" in c and "settlement" in c), None) or \
                          next((c for c in ["amount(sar)", "amount sar", "amount", "value"] if c in d.columns), None) or \
                          next((c for c in d.columns if "amount" in c), None)
+
         for col in d.columns:
             if "status" in str(col).lower():
                 status_col = col
@@ -556,24 +584,21 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             "reference": d[ref_col].astype(str).str.strip() if ref_col else "",
             "bank": d[bank_col].astype(str).str.strip(),
             "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
-            "amount": d[amount_col].map(_to_number),
+            "amount": pd.to_numeric(d[amount_col].astype(str).str.replace(",", ""), errors="coerce"),
             "status": d[status_col].astype(str).str.strip() if status_col else None,
-            "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
+            "type": d[type_col].astype(str).upper().str.strip() if type_col else "",
             "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
             "description": ""
         })
 
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
 
-        # Separate pending and closed/paid settlements
-        df_pending = pd.DataFrame()
-        df_paid = pd.DataFrame()
-        
         if status_col:
             df_pending = out[out["status"].str.upper().str.strip() == "PENDING"].copy()
             df_paid = out[out["status"].str.upper().str.strip() == "CLOSED"].copy()
         else:
             df_pending = out.copy()
+            df_paid = pd.DataFrame()
 
         return df_pending.reset_index(drop=True), df_paid.reset_index(drop=True)
     except Exception:
@@ -587,7 +612,7 @@ def parse_fund_movement(df: pd.DataFrame) -> pd.DataFrame:
         if not liq_col: return pd.DataFrame()
         out = pd.DataFrame({
             "date": pd.to_datetime(d["date"], errors="coerce"),
-            "total_liquidity": d[liq_col].map(_to_number)
+            "total_liquidity": pd.to_numeric(d[liq_col].astype(str).str.replace(",",""), errors="coerce")
         }).dropna()
         return out.sort_values("date")
     except Exception:
@@ -600,8 +625,8 @@ def parse_branch_cvp(df: pd.DataFrame) -> pd.DataFrame:
         if not validate_dataframe(d, required, "Collection vs Payments by Branch"): return pd.DataFrame()
         out = pd.DataFrame({
             "branch": d["branch"].astype(str).str.strip(),
-            "collection": d["collection"].map(_to_number).fillna(0.0),
-            "payments": d["payments"].map(_to_number).fillna(0.0)
+            "collection": pd.to_numeric(d["collection"].astype(str).str.replace(",",""), errors="coerce").fillna(0.0),
+            "payments": pd.to_numeric(d["payments"].astype(str).str.replace(",",""), errors="coerce").fillna(0.0)
         })
         out = out[out["branch"].ne("")].copy()
         out["net"] = out["collection"] - out["payments"]
@@ -670,7 +695,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             return pd.DataFrame()
         d = cols_lower(df)
 
-        # Robustly detect L/C No column (handles: 'l/c no.', 'l / c no', 'lc no', 'l c no', etc.)
+        # Robustly detect L/C No column
         lc_no_col = None
         possible_lc_names = [
             "l/c no.", "l/c no", "l / c no.", "l / c no", "lc no", "l c no", "l.c. no", "l.c no"
@@ -686,7 +711,6 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
                     lc_no_col = col
                     break
 
-        # Build rename map
         rename_map = {
             'applicant': 'applicant',
             'issuing bank': 'issuing_bank',
@@ -708,7 +732,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
 
         d = d.rename(columns=rename_map)
 
-        # Coerce datatypes (day-first parsing)
+        # day-first date parsing
         if 'submitted_date' in d.columns:
             d['submitted_date'] = pd.to_datetime(d['submitted_date'], errors='coerce', dayfirst=True)
         if 'maturity_date' in d.columns:
@@ -716,12 +740,10 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
         if 'value_sar' in d.columns:
             d['value_sar'] = d['value_sar'].apply(_to_number)
 
-        # Clean/standardize
         for col in ['branch','issuing_bank','advising_bank','status','lc_no','applicant','remarks']:
             if col in d.columns:
                 d[col] = d[col].astype(str).str.strip().str.upper()
 
-        # Keep rows with a value and branch; allow missing submitted_date
         required = [col for col in ['value_sar', 'branch'] if col in d.columns]
         out = d.dropna(subset=required)
         return out
@@ -884,7 +906,7 @@ def main():
     lc_next4_sum = float(df_lc.loc[df_lc["settlement_date"].between(today0, next4), "amount"].sum() if not df_lc.empty else 0.0)
     approved_sum = float(df_pay_approved["amount"].sum()) if not df_pay_approved.empty else 0.0
     
-    # KPI: Accepted Export LC Sum (overall)
+    # KPI: Accepted Export LC Sum
     accepted_export_lc_sum = 0.0
     if not df_export_lc.empty and 'status' in df_export_lc.columns:
         mask = df_export_lc['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
@@ -1017,7 +1039,7 @@ def main():
 
         st.markdown("---")
 
-        # 2) LCR & STL Settlements — Overview (same as your previous)
+        # 2) LCR & STL Settlements — Overview (unchanged core logic)
         st.markdown("---")
         st.markdown('<span class="section-chip">📅 LCR & STL Settlements — Overview</span>', unsafe_allow_html=True)
         st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
@@ -1030,7 +1052,6 @@ def main():
                 month_start = today0.replace(day=1)
                 month_end = (month_start + pd.offsets.MonthEnd(1)).normalize()
                 lc_m = df_lc[(df_lc["settlement_date"] >= month_start) & (df_lc["settlement_date"] <= month_end)].copy() if not df_lc.empty else pd.DataFrame()
-                lc_paid_m = df_lc_paid[(df_lc_paid["settlement_date"] >= month_start) & (df_lc_paid["settlement_date"] <= month_end)].copy() if not df_lc_paid.empty else pd.DataFrame()
                 all_pending = df_lc.copy() if not df_lc.empty else pd.DataFrame()
                 all_paid = df_lc_paid.copy() if not df_lc_paid.empty else pd.DataFrame()
                 total_due = (all_pending["amount"].sum() if not all_pending.empty else 0.0) + (all_paid["amount"].sum() if not all_paid.empty else 0.0)
@@ -1191,7 +1212,6 @@ def main():
                 st.info("No Export LC data available.")
             else:
                 elc_data = df_export_lc.copy()
-                # Prefer MTD; fallback to ALL
                 elc_mtd = pd.DataFrame()
                 if "submitted_date" in elc_data.columns:
                     elc_mtd = elc_data[
@@ -1453,7 +1473,6 @@ def main():
                 
                 elif settlement_view == "Progress by Urgency" and status_label == "Paid":
                     st.info("Progress by urgency view is only available for pending settlements.")
-                    # Show bank summary for paid
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                     display_as_progress_bars(bank_totals, "bank", "balance")
                 
@@ -1500,6 +1519,8 @@ def main():
                     show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view_data.columns]
                     v = view_data[show_cols].rename(columns={"bank": "Bank", "supplier": "Supplier", "currency": "Currency",
                                                              "amount": "Amount", "status": "Status"})
+                    # remove NaN text
+                    v = v.fillna("")
                     st.dataframe(style_right(v, num_cols=["Amount"]), use_container_width=True, height=360)
                 elif payment_view == "Mini Cards":
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
@@ -1516,7 +1537,7 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Export LC tab (updated: Advising Bank filter; Accepted due this month KPI; DD-MM-YYYY in table) ----
+    # ---- Export LC tab (updated: Advising Bank filter; Accepted Maturity-in-month KPI; DD-MM-YYYY in table) ----
     with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
@@ -1562,7 +1583,7 @@ def main():
             status_tabs = st.tabs(["ALL"] + statuses if statuses else ["ALL"])
             status_keys = ["ALL"] + statuses if statuses else ["ALL"]
 
-            # Current period for KPI
+            # Current month for KPI
             try:
                 now_local = pd.Timestamp.now(tz=config.TZ).tz_localize(None).normalize()
             except Exception:
@@ -1614,7 +1635,7 @@ def main():
                     else:
                         st.info("No records to summarize for the selected filters.")
 
-                    # Detailed table
+                    # Detailed table (fill blanks instead of NaN, dates DD-MM-YYYY)
                     st.markdown("#### Detailed View")
                     display_cols = {
                         'branch': 'Branch',
@@ -1630,11 +1651,12 @@ def main():
                     cols_to_show = [k for k in display_cols.keys() if k in filtered_df.columns]
                     if cols_to_show:
                         table_view = filtered_df[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
-                        # Format dates as DD-MM-YYYY (keep NaT as is)
+                        # Format dates as DD-MM-YYYY; then fill blanks
                         if 'Submitted Date' in table_view.columns:
                             table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date'], errors='coerce').dt.strftime('%d-%m-%Y')
                         if 'Maturity Date' in table_view.columns:
                             table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce').dt.strftime('%d-%m-%Y')
+                        table_view = table_view.replace('NaT', np.nan).fillna("")
                         st.dataframe(
                             style_right(table_view, num_cols=['Value (SAR)']), 
                             use_container_width=True, 
@@ -1889,6 +1911,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
