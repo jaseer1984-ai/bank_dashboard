@@ -21,6 +21,8 @@
 #   • Tables: remove “NAN/NaN/nan/None/null/NaT/NA/N/A” placeholders from display
 #   • Bank Balance card: negative Available and After Settlement values highlighted in red
 #   • Overview > LCR & STL Settlements KPIs restored to gradient card model
+#   • Weekly Settlement Schedule tooltip values formatted with commas
+#   • Settlements tab tables highlighted in 2 colors based on remarks (present vs blank)
 
 import io
 import time
@@ -136,35 +138,21 @@ st.markdown(f"""
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
   }}
-
-  /* Streamlit tabs colorization (index-based styling) */
-  [data-testid="stTabs"] button[role="tab"] {{
-    border-radius: 8px !important;
-    margin-right: 6px !important;
-    font-weight: 700 !important;
-  }}
-  /* Overview */
+  [data-testid="stTabs"] button[role="tab"] {{ border-radius: 8px !important; margin-right: 6px !important; font-weight: 700 !important; }}
   [data-testid="stTabs"] button[role="tab"]:nth-child(1) {{ background:#e0e7ff; color:#1e293b; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(1) {{ background:#c7d2fe; }}
-  /* Bank */
   [data-testid="stTabs"] button[role="tab"]:nth-child(2) {{ background:#ccfbf1; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(2) {{ background:#99f6e4; }}
-  /* Settlements */
   [data-testid="stTabs"] button[role="tab"]:nth-child(3) {{ background:#e0f2fe; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(3) {{ background:#bae6fd; }}
-  /* Supplier Payments */
   [data-testid="stTabs"] button[role="tab"]:nth-child(4) {{ background:#dcfce7; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(4) {{ background:#bbf7d0; }}
-  /* Export LC (now 5th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(5) {{ background:#ffedd5; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(5) {{ background:#fed7aa; }}
-  /* Exchange Rates (now 6th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(6) {{ background:#fef3c7; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(6) {{ background:#fde68a; }}
-  /* Facility Report (now 7th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(7) {{ background:#f1f5f9; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e2e8f0; }}
-  /* Reports (now 8th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(8) {{ background:#f3e8ff; color:#0f172a; }}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(8) {{ background:#e9d5ff; }}
 </style>
@@ -814,6 +802,7 @@ def main():
     df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
     df_fx = parse_exchange_rates(df_fx_raw)
     
+    # Load Export LC data
     df_export_lc_raw = read_excel_all_sheets(LINKS["EXPORT_LC"])
     df_export_lc = parse_export_lc(df_export_lc_raw)
 
@@ -1037,18 +1026,36 @@ def main():
                         unsafe_allow_html=True
                     )
 
-                # Weekly chart for current month
+                # Weekly chart for current month (Plotly with comma-formatted tooltip)
                 if not lc_m.empty:
-                    lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
-                    weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
-                    st.markdown("### 📊 Weekly Settlement Schedule")
-                    st.bar_chart(weekly.set_index("week")["amount"])
+                    weekly = (lc_m
+                              .assign(week=lambda df_: df_["settlement_date"].dt.isocalendar().week.astype(int))
+                              .groupby("week", as_index=False)["amount"].sum()
+                              .sort_values("week"))
+                    try:
+                        import plotly.graph_objects as go
+                        fig = go.Figure(go.Bar(
+                            x=[f"Week {int(w)}" for w in weekly["week"]],
+                            y=weekly["amount"],
+                            marker_color=THEME["accent1"],
+                            text=[f"SAR {v:,.0f}" for v in weekly["amount"]],
+                            textposition="outside",
+                            hovertemplate=" %{x}<br>Amount: SAR %{y:,.0f}<extra></extra>"
+                        ))
+                        fig.update_layout(template="plotly_white",
+                                          height=350,
+                                          margin=dict(l=20, r=20, t=20, b=40),
+                                          xaxis_title="", yaxis_title="Amount (SAR)",
+                                          showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    except Exception:
+                        st.bar_chart(weekly.set_index("week")["amount"])
             except Exception as e:
                 st.error(f"Unable to render Settlements section: {e}")
 
         st.markdown("---")
 
-        # FX MTD section
+        # FX MTD
         if st.session_state.get("show_fx", True) and not df_fx.empty:
             st.subheader("Exchange Rates — Month Overview")
             fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy()
@@ -1249,28 +1256,29 @@ def main():
                     cc1, cc2, cc3 = st.columns(3)
                     with cc1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
                     with cc2: st.metric(f"Number of {status_label}", len(view_data))
-                    
                     if status_label == "Pending":
                         with cc3: st.metric("Urgent (2 days)", len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
-                        
-                        viz = view_data.copy()
-                        viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
-                        viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
-                        rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
-                        viz = viz.rename(columns={k: v for k, v in rename.items() if k in viz.columns})
-                        cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Days Until Due", "Remark", "Description"]
-                        cols = [c for c in cols if c in viz.columns]
-                        show = tidy_display(viz[cols].sort_values("Settlement Date"))
-                        st.dataframe(style_right(show, num_cols=["Amount"]), use_container_width=True, height=400)
                     else:
-                        viz_paid = view_data.copy()
-                        viz_paid["Settlement Date"] = viz_paid["settlement_date"].dt.strftime(config.DATE_FMT)
-                        rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
-                        viz_paid = viz_paid.rename(columns={k: v for k, v in rename.items() if k in viz_paid.columns})
-                        cols_paid = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]
-                        cols_paid = [c for c in cols_paid if c in viz_paid.columns]
-                        show_paid = tidy_display(viz_paid[cols_paid].sort_values("Settlement Date", ascending=False))
-                        st.dataframe(style_right(show_paid, num_cols=["Amount"]), use_container_width=True, height=400)
+                        with cc3: st.metric("Urgent (2 days)", 0)
+
+                    # Build table and highlight by remarks
+                    viz = view_data.copy()
+                    viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
+                    rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status",
+                              "remark": "Remark", "description": "Description", "amount": "Amount"}
+                    viz = viz.rename(columns={k: v for k, v in rename.items() if k in viz.columns})
+                    cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Remark", "Description"]
+                    cols = [c for c in cols if c in viz.columns]
+                    table_df = tidy_display(viz[cols].sort_values("Settlement Date", ascending=(status_label=="Pending")))
+
+                    def highlight_by_remark(row):
+                        r = str(row.get("Remark", "")).strip().upper()
+                        if r and r not in ("-", "NAN", "NONE", "NULL"):
+                            return ['background-color: #fef3c7'] * len(row)  # amber for present remark (current due)
+                        else:
+                            return ['background-color: #fee2e2'] * len(row)  # red for blank remark (balance due)
+                    styled = style_right(table_df, num_cols=["Amount"]).apply(highlight_by_remark, axis=1)
+                    st.dataframe(styled, use_container_width=True, height=420)
                 
                 elif settlement_view == "Progress by Urgency" and status_label == "Pending":
                     tmp = view_data.copy()
