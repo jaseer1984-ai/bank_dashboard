@@ -1490,21 +1490,6 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Export LC tab (new position, new filter) ----
-    
-- Show **L/C No.** instead of **Issuing Bank** in the detailed table.
-- Replace the **Status** filter dropdown with **Status** tabs.
-- Add a new filter for **Issuing Bank**.
-- Keep the **Branch** filter and **Submitted Date** filters as before.
-- Ensure the table columns and filters reflect these changes.
-
-Below is the **entire updated code** with the corrected **Export LC** tab section. The rest of your code remains unchanged except for the Export LC tab part.
-
----
-
-```python
-# ... [Your entire code above remains unchanged] ...
-
 # ---- Export LC tab (new position, new filter) ----
 with tab_export_lc:
     st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
@@ -1880,5 +1865,6 @@ If you want me to provide the **full entire script** with this integrated (not j
 
 if __name__ == "__main__":
     main()
+
 
 
