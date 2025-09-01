@@ -13,15 +13,15 @@
 # - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
 # - Fixed bug where tab focus jumped on filter change by adding stable keys.
 # - Updates:
-#   • All KPI figures in tabs now use the card model
 #   • Export LC: Advising Bank filter, L/C No in table, Status as tabs, day-first parsing, DD-MM-YYYY display,
-#                and “Accepted (Maturity in current month)” KPI, date filter is on MATURITY DATE
+#                and “Accepted (Maturity in current month)” KPI
 #   • Supplier Payments: robust parser (no .str.trim), no NaN text in tables
-#   • Settlements: robust date-col detection (incl. NEW MATURITY DATE), day-first parsing, normalized statuses,
-#                  2-color highlight on remarks, and urgent settlement warnings restored
-#   • Bank Balance: robust parser with fallback, red highlighting of negative numbers in cards
+#   • Settlements: robust date-col detection (incl. NEW MATURITY DATE), day-first parsing, normalized statuses, 2-color highlight on remarks
+#   • Bank Balance: robust parser with fallback (tab won’t disappear), red highlighting of negative numbers in cards
 #   • Tables: remove “NAN/NaN/nan/None/null/NaT/NA/N/A” placeholders from display
 #   • Weekly Settlement Schedule tooltip formatted with commas
+#   • All KPI figures in tabs now use the card model
+#   • Export LC date filter now on MATURITY DATE
 
 import io
 import time
@@ -1175,6 +1175,74 @@ def main():
                 table = table.rename(columns=rename_map)
                 st.dataframe(style_right(table, num_cols=[c for c in ["Balance","After Settlement"] if c in table.columns]),
                              use_container_width=True, height=360)
+
+        st.markdown("---")
+        st.markdown('<span class="section-chip">📈 Liquidity Trend Analysis</span>', unsafe_allow_html=True)
+        if df_fm.empty:
+            st.info("No liquidity data available.")
+        else:
+            try:
+                import plotly.io as pio, plotly.graph_objects as go
+                if "brand" not in pio.templates:
+                    pio.templates["brand"] = pio.templates["plotly_white"]
+                latest_liquidity = df_fm.iloc[-1]["total_liquidity"]
+                if len(df_fm) > 1:
+                    prev = df_fm.iloc[-2]["total_liquidity"]
+                    trend_change = latest_liquidity - prev
+                    trend_pct = (trend_change / prev) * 100 if prev != 0 else 0
+                    trend_text = f"{'📈' if trend_change > 0 else '📉'} {trend_pct:+.1f}%"
+                else:
+                    trend_text = "No trend data"
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=df_fm["date"], y=df_fm["total_liquidity"], mode='lines+markers', line=dict(width=3), marker=dict(size=6)))
+                    fig.update_layout(template="plotly_white", title="Total Liquidity Trend",
+                                      xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
+                                      margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+                    fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
+                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                with c2:
+                    st.markdown("### 📊 Liquidity Metrics")
+                    st.metric("Current", fmt_number_only(latest_liquidity))
+                    if len(df_fm) > 1: st.metric("Trend", trend_text)
+                    st.markdown("**Statistics (30d)**")
+                    last30 = df_fm.tail(30)
+                    st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
+                    st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
+                    st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
+            except Exception:
+                st.error("❌ Unable to display liquidity trend analysis")
+                st.line_chart(df_fm.set_index("date")["total_liquidity"])
+
+        st.markdown("---")
+        st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
+        if df_cvp.empty:
+            st.info("No data in 'Collection vs Payments by Branch'.")
+        else:
+            cvp_view = st.radio("", options=["Bars", "Table", "Cards"], index=0, horizontal=True, label_visibility="collapsed")
+            cvp_sorted = df_cvp.sort_values("net", ascending=False).reset_index(drop=True)
+            if cvp_view == "Bars":
+                try:
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    fig.add_bar(name="Collection", x=cvp_sorted["branch"], y=cvp_sorted["collection"])
+                    fig.add_bar(name="Payments", x=cvp_sorted["branch"], y=cvp_sorted["payments"])
+                    fig.update_layout(barmode="group", height=420, margin=dict(l=20, r=20, t=30, b=80),
+                                      xaxis_title="Branch", yaxis_title="Amount (SAR)", legend_title_text="")
+                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                except Exception:
+                    st.bar_chart(cvp_sorted.set_index("branch")[["collection", "payments"]])
+            elif cvp_view == "Table":
+                tbl = cvp_sorted.rename(columns={"branch": "Branch", "collection": "Collection", "payments": "Payments", "net": "Net"})
+                styled = style_right(tbl, num_cols=["Collection", "Payments", "Net"])
+                def _net_red(val):
+                    try: return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
+                    except Exception: return ''
+                styled = styled.applymap(_net_red, subset=["Net"])
+                st.dataframe(styled, use_container_width=True, height=420)
+            else:
+                display_as_mini_cards(cvp_sorted.rename(columns={"net":"balance"}), "branch", "balance", pad=pad, radius=radius, shadow=shadow)
 
     # ---- Settlements tab ----
     with tab_settlements:
