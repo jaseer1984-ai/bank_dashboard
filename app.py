@@ -13,7 +13,6 @@
 # - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
 # - Fixed bug where tab focus jumped on filter change by adding stable keys.
 # - Updates:
-#   • All KPI figures in tabs now use the card model
 #   • Export LC: Advising Bank filter, L/C No in table, Status as tabs, day-first parsing, DD-MM-YYYY display,
 #                and “Accepted (Maturity in current month)” KPI
 #   • Supplier Payments: robust parser (no .str.trim), no NaN text in tables
@@ -21,6 +20,8 @@
 #   • Bank Balance: robust parser with fallback (tab won’t disappear), red highlighting of negative numbers in cards
 #   • Tables: remove “NAN/NaN/nan/None/null/NaT/NA/N/A” placeholders from display
 #   • Weekly Settlement Schedule tooltip formatted with commas
+#   • All KPI figures in tabs now use the card model
+#   • Export LC date filter now on MATURITY DATE
 
 import io
 import time
@@ -612,11 +613,7 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
                 rate_val = _to_number(row[curr_col])
                 if pd.notna(rate_val) and rate_val > 0:
                     currency_pair = f"{curr_col.upper()}/SAR"
-                    result_rows.append({
-                        "currency_pair": currency_pair,
-                        "rate": rate_val,
-                        "date": date_val
-                    })
+                    result_rows.append({"currency_pair": currency_pair, "rate": rate_val, "date": date_val})
         if not result_rows:
             return pd.DataFrame()
         out = pd.DataFrame(result_rows).sort_values(["currency_pair", "date"])
@@ -1045,9 +1042,10 @@ def main():
                     )
 
                 if not lc_m.empty:
-                    lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
-                    weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
-                    st.markdown("### 📊 Weekly Settlement Schedule")
+                    weekly = (lc_m
+                              .assign(week=lambda df_: df_["settlement_date"].dt.isocalendar().week.astype(int))
+                              .groupby("week", as_index=False)["amount"].sum()
+                              .sort_values("week"))
                     try:
                         import plotly.graph_objects as go
                         fig = go.Figure(go.Bar(
@@ -1269,33 +1267,12 @@ def main():
                 if settlement_view == "Summary + Table":
                     cc1, cc2, cc3 = st.columns(3)
                     with cc1:
-                        st.markdown(
-                            f"""
-                            <div class="kpi-card">
-                                <div class="kpi-label">Total {status_label} Amount</div>
-                                <div class="kpi-value">{fmt_number_only(view_data["amount"].sum())}</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True)
+                        st.markdown(f"""<div class="kpi-card"><div class="kpi-label">Total {status_label} Amount</div><div class="kpi-value">{fmt_number_only(view_data["amount"].sum())}</div></div>""", unsafe_allow_html=True)
                     with cc2:
-                        st.markdown(
-                            f"""
-                            <div class="kpi-card">
-                                <div class="kpi-label">Number of {status_label}</div>
-                                <div class="kpi-value">{len(view_data)}</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True)
+                        st.markdown(f"""<div class="kpi-card"><div class="kpi-label">Number of {status_label}</div><div class="kpi-value">{len(view_data)}</div></div>""", unsafe_allow_html=True)
                     if status_label == "Pending":
                         with cc3:
-                            st.markdown(
-                                f"""
-                                <div class="kpi-card">
-                                    <div class="kpi-label">Urgent (2 days)</div>
-                                    <div class="kpi-value">{len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)])}</div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True)
+                            st.markdown(f"""<div class="kpi-card"><div class="kpi-label">Urgent (2 days)</div><div class="kpi-value">{len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)])}</div></div>""", unsafe_allow_html=True)
 
                     viz = view_data.copy()
                     viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
@@ -1309,9 +1286,9 @@ def main():
                     def highlight_by_remark(row):
                         r = str(row.get("Remark", "")).strip().upper()
                         if r and r not in ("-", "NAN", "NONE", "NULL"):
-                            return ['background-color: #fef3c7'] * len(row)
+                            return ['background-color: #fef3c7'] * len(row)  # amber
                         else:
-                            return ['background-color: #fee2e2'] * len(row)
+                            return ['background-color: #fee2e2'] * len(row)  # red
                     styled = style_right(table_df, num_cols=["Amount"]).apply(highlight_by_remark, axis=1)
                     st.dataframe(styled, use_container_width=True, height=420)
                 
@@ -1426,7 +1403,7 @@ def main():
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
         else:
-            # Filters: Branch, Advising Bank, Submitted Date
+            # Filters: Branch, Advising Bank, Maturity Date
             col1, col2 = st.columns(2)
             with col1:
                 branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
@@ -1435,22 +1412,22 @@ def main():
                 advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique()) if "advising_bank" in df_export_lc.columns else []
                 selected_advising_banks = st.multiselect("Filter by Advising Bank", options=advising_banks, default=advising_banks, key="export_lc_advising_filter") if advising_banks else []
 
-            sub_dates = df_export_lc["submitted_date"].dropna() if "submitted_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
-            min_date_default = (sub_dates.min().date() if not sub_dates.empty else (datetime.today().date().replace(day=1)))
-            max_date_default = (sub_dates.max().date() if not sub_dates.empty else datetime.today().date())
+            mat_dates = df_export_lc["maturity_date"].dropna() if "maturity_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
+            min_date_default = (mat_dates.min().date() if not mat_dates.empty else (datetime.today().date().replace(day=1)))
+            max_date_default = (mat_dates.max().date() if not mat_dates.empty else datetime.today().date())
             d1, d2 = st.columns(2)
             with d1:
-                start_date_filter = st.date_input("From Submitted Date", value=min_date_default, key="export_lc_start_date")
+                start_date_filter = st.date_input("From Maturity Date", value=min_date_default, key="export_lc_start_date")
             with d2:
-                end_date_filter = st.date_input("To Submitted Date", value=max_date_default, key="export_lc_end_date")
+                end_date_filter = st.date_input("To Maturity Date", value=max_date_default, key="export_lc_end_date")
 
             # Apply filters
             filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
             if selected_advising_banks and "advising_bank" in filtered_df_base.columns:
                 filtered_df_base = filtered_df_base[filtered_df_base["advising_bank"].isin(selected_advising_banks)]
-            if "submitted_date" in filtered_df_base.columns:
-                date_mask = filtered_df_base["submitted_date"].dt.date.between(start_date_filter, end_date_filter, inclusive="both")
-                no_date_mask = filtered_df_base["submitted_date"].isna()
+            if "maturity_date" in filtered_df_base.columns:
+                date_mask = filtered_df_base["maturity_date"].dt.date.between(start_date_filter, end_date_filter, inclusive="both")
+                no_date_mask = filtered_df_base["maturity_date"].isna()
                 filtered_df_base = filtered_df_base[date_mask | no_date_mask].copy()
 
             # Status tabs
@@ -1558,21 +1535,26 @@ def main():
                     cols = st.columns(min(4, len(latest_fx)))
                     for i, row in latest_fx.iterrows():
                         with cols[int(i) % min(4, len(latest_fx))]:
-                            st.metric(row["currency_pair"], f"{row['rate']:.4f}")
+                            st.markdown(
+                                f"""
+                                <div class="kpi-card">
+                                    <div class="kpi-label">{row["currency_pair"]}</div>
+                                    <div class="kpi-value">{row['rate']:.4f}</div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True)
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Currency Pairs", len(latest_fx))
+                    st.markdown(f"""<div class="kpi-card"><div class="kpi-label">Currency Pairs</div><div class="kpi-value">{len(latest_fx)}</div></div>""", unsafe_allow_html=True)
                 with col2:
                     if "change_pct" in latest_fx.columns:
                         avg_change = latest_fx["change_pct"].mean()
-                        st.metric("Avg Change %", f"{avg_change:.2f}%" if pd.notna(avg_change) else "N/A")
+                        st.markdown(f"""<div class="kpi-card"><div class="kpi-label">Avg Change %</div><div class="kpi-value">{avg_change:.2f}%</div></div>""", unsafe_allow_html=True)
                 with col3:
                     last_update = latest_fx["date"].max() if "date" in latest_fx.columns else "N/A"
                     if pd.notna(last_update):
-                        st.metric("Last Update", last_update.strftime(config.DATE_FMT))
-                    else:
-                        st.metric("Last Update", "N/A")
+                        st.markdown(f"""<div class="kpi-card"><div class="kpi-label">Last Update</div><div class="kpi-value">{last_update.strftime(config.DATE_FMT)}</div></div>""", unsafe_allow_html=True)
             
             elif fx_view == "Rate Trends":
                 st.subheader("📈 Exchange Rate Trends")
