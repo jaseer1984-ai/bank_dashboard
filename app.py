@@ -12,11 +12,14 @@
 # - "Export LC" tab moved after "Supplier Payments" and a "Status" filter added.
 # - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
 # - Fixed bug where tab focus jumped on filter change by adding stable keys.
+# - UPDATE: Export LC tab now shows L/C No in table, uses Advising Bank instead of Issuing Bank in table,
+#           Status moved to tabs, and added Issuing Bank filter. Parsing of L/C No made robust.
 
 import io
 import time
 import logging
 import os
+import re
 from datetime import datetime
 from dataclasses import dataclass
 from functools import wraps
@@ -667,21 +670,36 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse and clean the combined Export LC data."""
+    """Parse and clean the combined Export LC data (robust L/C No detection)."""
     try:
-        if df.empty: return pd.DataFrame()
-        d = cols_lower(df)
-        required_cols = ['submitted date', 'branch', 'value (sar)']
-        if not all(col in d.columns for col in required_cols):
-            logger.warning(f"Export LC sheet missing required columns. Found: {d.columns.tolist()}")
+        if df.empty: 
             return pd.DataFrame()
-        d = d.rename(columns={
+        d = cols_lower(df)
+
+        # Robustly detect L/C No column (handles: 'l/c no.', 'l / c no', 'lc no', 'l c no', etc.)
+        lc_no_col = None
+        possible_lc_names = [
+            "l/c no.", "l/c no", "l / c no.", "l / c no", "lc no", "l c no", "l.c. no", "l.c no"
+        ]
+        for name in possible_lc_names:
+            if name in d.columns:
+                lc_no_col = name
+                break
+        if lc_no_col is None:
+            for col in d.columns:
+                s = str(col).strip().lower()
+                if re.search(r'\b(l\s*/\s*c|l\s*c|lc)\b.*no', s):
+                    lc_no_col = col
+                    break
+
+        # Build rename map
+        rename_map = {
             'applicant': 'applicant',
-            'l/c no.': 'lc_no',
             'issuing bank': 'issuing_bank',
             'advising bank': 'advising_bank',
             'reference no.': 'reference_no',
             'benefecery branch': 'beneficiary_branch',
+            'beneficiary branch': 'beneficiary_branch',
             'invoice no.': 'invoice_no',
             'submitted date': 'submitted_date',
             'value (sar)': 'value_sar',
@@ -690,11 +708,33 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'status': 'status',
             'remarks': 'remarks',
             'branch': 'branch'
-        })
-        d['submitted_date'] = pd.to_datetime(d['submitted_date'], errors='coerce')
-        d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
-        d['value_sar'] = d['value_sar'].apply(_to_number)
-        out = d.dropna(subset=['value_sar', 'branch'])
+        }
+        if lc_no_col:
+            rename_map[lc_no_col] = 'lc_no'
+
+        d = d.rename(columns=rename_map)
+
+        # Coerce datatypes
+        if 'submitted_date' in d.columns:
+            d['submitted_date'] = pd.to_datetime(d['submitted_date'], errors='coerce')
+        if 'maturity_date' in d.columns:
+            d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
+        if 'value_sar' in d.columns:
+            d['value_sar'] = d['value_sar'].apply(_to_number)
+
+        # Clean/standardize
+        if 'branch' in d.columns:
+            d['branch'] = d['branch'].astype(str).str.strip().str.upper()
+        if 'issuing_bank' in d.columns:
+            d['issuing_bank'] = d['issuing_bank'].astype(str).str.strip().str.upper()
+        if 'advising_bank' in d.columns:
+            d['advising_bank'] = d['advising_bank'].astype(str).str.strip().str.upper()
+        if 'status' in d.columns:
+            d['status'] = d['status'].astype(str).str.strip().str.upper()
+
+        # Keep rows with a value and branch; allow missing submitted_date
+        required = [col for col in ['value_sar', 'branch'] if col in d.columns]
+        out = d.dropna(subset=required)
         return out
     except Exception as e:
         logger.error(f"Error parsing Export LC data: {e}")
@@ -881,7 +921,7 @@ def main():
         if "after_settlement" in df_by_bank.columns:
             neg_after = df_by_bank[df_by_bank["after_settlement"] < 0].copy()
             if not neg_after.empty:
-                cnt2 = len(neg_after); total_neg2 = neg_after["after_settlement"].sum()
+                cnt2 = len(neg_after); total_neg2 = df_by_bank.loc[df_by_bank['after_settlement'] < 0, 'after_settlement'].sum()
                 names2 = ", ".join(neg_after.sort_values("after_settlement")["bank"].tolist())
                 insights.append({"type": "error","title": "Banks Negative After Settlement",
                                  "content": f"{cnt2} bank(s) go negative after settlement (total {fmt_number_only(total_neg2)}). Affected: {names2}."})
@@ -1310,7 +1350,7 @@ def main():
         st.markdown("---")
         st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
         if df_cvp.empty:
-            st.info("No data in \'Collection vs Payments by Branch\'. Make sure the sheet has \'Branch\', \'Collection\', \'Payments\'.")
+            st.info("No data in 'Collection vs Payments by Branch'. Make sure the sheet has 'Branch', 'Collection', 'Payments'.")
         else:
             cvp_view = st.radio("", options=["Bars", "Table", "Cards"], index=0, horizontal=True, label_visibility="collapsed")
             cvp_sorted = df_cvp.sort_values("net", ascending=False).reset_index(drop=True)
@@ -1490,129 +1530,116 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-# ---- Export LC tab (new position, new filter) ----
-with tab_export_lc:
-    st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
-    if df_export_lc.empty:
-        st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
-    else:
-        # Create filters
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            branches = sorted(df_export_lc["branch"].dropna().unique())
-            selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
-
-        with col2:
-            issuing_banks = sorted(df_export_lc["issuing_bank"].dropna().unique()) if "issuing_bank" in df_export_lc.columns else []
-            selected_issuing_banks = st.multiselect("Filter by Issuing Bank", options=issuing_banks, default=issuing_banks, key="export_lc_issuing_bank_filter")
-
-        with col3:
-            min_date = df_export_lc["submitted_date"].min().date() if not df_export_lc["submitted_date"].isna().all() else datetime.today().date()
-            max_date = df_export_lc["submitted_date"].max().date() if not df_export_lc["submitted_date"].isna().all() else datetime.today().date()
-            start_date_filter = st.date_input("From Submitted Date", value=min_date, key="export_lc_start_date")
-            end_date_filter = st.date_input("To Submitted Date", value=max_date, key="export_lc_end_date")
-
-        # Status tabs instead of filter dropdown
-        statuses = sorted(df_export_lc["status"].dropna().unique()) if "status" in df_export_lc.columns else []
-        selected_status = st.tabs(["All"] + statuses)
-        # We need to capture which tab is selected
-        # Streamlit tabs return a list of containers, so we use st.session_state to track selection
-        # But since tabs don't return selected index, we simulate with radio instead for simplicity here:
-
-        # Replace tabs with radio for better control:
-        selected_status_radio = st.radio("Filter by Status", options=["All"] + statuses, index=0, horizontal=True, key="export_lc_status_radio")
-
-        # Apply filters
-        filtered_df = df_export_lc.copy()
-
-        if selected_branches:
-            filtered_df = filtered_df[filtered_df["branch"].isin(selected_branches)]
-
-        if selected_issuing_banks:
-            filtered_df = filtered_df[filtered_df["issuing_bank"].isin(selected_issuing_banks)]
-
-        if selected_status_radio != "All":
-            filtered_df = filtered_df[filtered_df["status"] == selected_status_radio]
-
-        # Apply date filter while keeping rows with no date
-        date_mask = (filtered_df["submitted_date"].dt.date >= start_date_filter) & (filtered_df["submitted_date"].dt.date <= end_date_filter)
-        no_date_mask = filtered_df["submitted_date"].isna()
-        filtered_df = filtered_df[date_mask | no_date_mask].copy()
-
-        # Display metrics (without average)
-        st.markdown("---")
-        m1, m2 = st.columns(2)
-        m1.metric("Total Value (SAR)", fmt_number_only(filtered_df['value_sar'].sum()))
-        m2.metric("Total LCs", len(filtered_df))
-
-        # Summary by Branch (based on current filters, without average)
-        st.markdown("#### Summary by Branch")
-        if not filtered_df.empty:
-            summary_by_branch = (
-                filtered_df.groupby('branch', as_index=False)
-                           .agg(
-                               LCs=('value_sar', 'size'),
-                               Total_Value_SAR=('value_sar', 'sum'),
-                           )
-                           .rename(columns={
-                               'branch': 'Branch',
-                               'Total_Value_SAR': 'Total Value (SAR)',
-                           })
-                           .sort_values('Total Value (SAR)', ascending=False)
-            )
-            st.dataframe(
-                style_right(summary_by_branch, num_cols=['LCs', 'Total Value (SAR)']),
-                use_container_width=True,
-                height=300
-            )
+    # ---- Export LC tab (updated: status tabs, issuing bank filter, L/C No + Advising Bank in table) ----
+    with tab_export_lc:
+        st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
+        if df_export_lc.empty:
+            st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
         else:
-            st.info("No records to summarize for the selected filters.")
+            # Create filters (Branch, Issuing Bank, Date)
+            col1, col2 = st.columns(2)
+            with col1:
+                branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
+                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
+            with col2:
+                issuing_banks = sorted(df_export_lc["issuing_bank"].dropna().astype(str).unique()) if "issuing_bank" in df_export_lc.columns else []
+                if issuing_banks:
+                    selected_issuing_banks = st.multiselect("Filter by Issuing Bank", options=issuing_banks, default=issuing_banks, key="export_lc_issuing_filter")
+                else:
+                    selected_issuing_banks = []
 
-        # Detailed table
-        st.markdown("#### Detailed View")
-        display_cols = {
-            'branch': 'Branch',
-            'applicant': 'Applicant',
-            'lc_no': 'L/C No.',
-            'advising_bank': 'Advising Bank',
-            'submitted_date': 'Submitted Date',
-            'maturity_date': 'Maturity Date',
-            'value_sar': 'Value (SAR)',
-            'status': 'Status',
-            'remarks': 'Remarks'
-        }
+            # Dates (safe defaults even if all NaT)
+            sub_dates = df_export_lc["submitted_date"].dropna() if "submitted_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
+            min_date_default = (sub_dates.min().date() if not sub_dates.empty else (datetime.today().date().replace(day=1)))
+            max_date_default = (sub_dates.max().date() if not sub_dates.empty else datetime.today().date())
+            d1, d2 = st.columns(2)
+            with d1:
+                start_date_filter = st.date_input("From Submitted Date", value=min_date_default, key="export_lc_start_date")
+            with d2:
+                end_date_filter = st.date_input("To Submitted Date", value=max_date_default, key="export_lc_end_date")
 
-        # Filter columns to those present in dataframe
-        cols_to_show = {k: v for k, v in display_cols.items() if k in filtered_df.columns}
+            # Apply branch + issuing bank filters first
+            filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
+            if selected_issuing_banks and "issuing_bank" in filtered_df_base.columns:
+                filtered_df_base = filtered_df_base[filtered_df_base["issuing_bank"].isin(selected_issuing_banks)]
 
-        table_view = filtered_df[list(cols_to_show.keys())].rename(columns=cols_to_show)
+            # Apply date filter (keep rows with no submitted_date)
+            if "submitted_date" in filtered_df_base.columns:
+                date_mask = filtered_df_base["submitted_date"].dt.date.between(start_date_filter, end_date_filter, inclusive="both")
+                no_date_mask = filtered_df_base["submitted_date"].isna()
+                filtered_df_base = filtered_df_base[date_mask | no_date_mask].copy()
 
-        # Safely format date columns
-        if 'Submitted Date' in table_view.columns:
-            table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
-        if 'Maturity Date' in table_view.columns:
-            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
+            # Status as tabs
+            statuses = []
+            if "status" in filtered_df_base.columns:
+                statuses = sorted([s for s in filtered_df_base["status"].dropna().astype(str).str.strip().str.upper().unique() if s])
+            status_tabs = st.tabs(["ALL"] + statuses if statuses else ["ALL"])
+            status_keys = ["ALL"] + statuses if statuses else ["ALL"]
 
-        st.dataframe(
-            style_right(table_view, num_cols=['Value (SAR)']),
-            use_container_width=True,
-            height=500
-        )
+            for tab, status_key in zip(status_tabs, status_keys):
+                with tab:
+                    if status_key == "ALL":
+                        filtered_df = filtered_df_base.copy()
+                    else:
+                        filtered_df = filtered_df_base[filtered_df_base["status"].astype(str).str.strip().str.upper() == status_key].copy()
 
-### Summary of changes in the Export LC tab:
+                    # KPIs
+                    st.markdown("---")
+                    m1, m2 = st.columns(2)
+                    m1.metric("Total Value (SAR)", fmt_number_only(filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0))
+                    m2.metric("Total LCs", len(filtered_df))
 
-- Added a **3-column layout** for filters: Branch, Issuing Bank, Submitted Date range.
-- Replaced the **Status filter dropdown** with a **radio button group** for status tabs (All + each status).
-- Filtered the dataframe based on selected Branches, Issuing Banks, and Status.
-- Kept rows with missing submitted dates when filtering by date.
-- In the detailed table, replaced **Issuing Bank** column with **Advising Bank**.
-- Added **L/C No.** column.
-- Formatted date columns nicely.
-- Kept the summary by branch and metrics consistent.
+                    # Summary by Branch
+                    st.markdown("#### Summary by Branch")
+                    if not filtered_df.empty and {'branch','value_sar'}.issubset(filtered_df.columns):
+                        summary_by_branch = (
+                            filtered_df.groupby('branch', as_index=False)
+                                       .agg(
+                                           LCs=('value_sar', 'size'),
+                                           Total_Value_SAR=('value_sar', 'sum'),
+                                       )
+                                       .rename(columns={
+                                           'branch': 'Branch',
+                                           'Total_Value_SAR': 'Total Value (SAR)',
+                                       })
+                                       .sort_values('Total Value (SAR)', ascending=False)
+                        )
+                        st.dataframe(
+                            style_right(summary_by_branch, num_cols=['LCs', 'Total Value (SAR)']),
+                            use_container_width=True,
+                            height=300
+                        )
+                    else:
+                        st.info("No records to summarize for the selected filters.")
 
----
-
-If you want me to provide the **full entire script** with this integrated (not just the Export LC tab), please let me know! Otherwise, you can replace your existing Export LC tab code with the above snippet.
+                    # Detailed table (includes L/C No and Advising Bank (instead of Issuing Bank))
+                    st.markdown("#### Detailed View")
+                    display_cols = {
+                        'branch': 'Branch',
+                        'applicant': 'Applicant',
+                        'lc_no': 'L/C No',
+                        'advising_bank': 'Advising Bank',
+                        'submitted_date': 'Submitted Date',
+                        'maturity_date': 'Maturity Date',
+                        'value_sar': 'Value (SAR)',
+                        'status': 'Status',
+                        'remarks': 'Remarks'
+                    }
+                    cols_to_show = [k for k in display_cols.keys() if k in filtered_df.columns]
+                    if cols_to_show:
+                        table_view = filtered_df[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
+                        # Safely format date columns
+                        if 'Submitted Date' in table_view.columns:
+                            table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
+                        if 'Maturity Date' in table_view.columns:
+                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
+                        st.dataframe(
+                            style_right(table_view, num_cols=['Value (SAR)']), 
+                            use_container_width=True, 
+                            height=500
+                        )
+                    else:
+                        st.info("No columns available for detailed view.")
 
     # ---- Exchange Rates tab ----
     with tab_fx:
@@ -1861,7 +1888,3 @@ If you want me to provide the **full entire script** with this integrated (not j
 
 if __name__ == "__main__":
     main()
-
-
-
-
