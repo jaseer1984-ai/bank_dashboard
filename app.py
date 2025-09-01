@@ -16,7 +16,7 @@
 #   • All KPI figures in tabs now use the card model
 #   • Export LC: Advising Bank filter, L/C No in table, Status as tabs, day-first parsing, DD-MM-YYYY display,
 #                and “Accepted (Maturity in current month)” KPI, date filter is on MATURITY DATE
-#   • Supplier Payments: robust parser, no NaN text in tables
+#   • Supplier Payments: robust parser (no .str.trim), no NaN text in tables
 #   • Settlements: robust date-col detection (incl. NEW MATURITY DATE), day-first parsing, normalized statuses,
 #                  2-color highlight on remarks, and urgent settlement warnings restored
 #   • Bank Balance: robust parser with fallback, red highlighting of negative numbers in cards
@@ -1218,9 +1218,9 @@ def main():
                     def highlight_by_remark(row):
                         r = str(row.get("Remark", "")).strip().upper()
                         if r and r not in ("-", "NAN", "NONE", "NULL"):
-                            return ['background-color: #fef3c7'] * len(row)
+                            return ['background-color: #fef3c7'] * len(row)  # amber
                         else:
-                            return ['background-color: #fee2e2'] * len(row)
+                            return ['background-color: #fee2e2'] * len(row)  # red
                     styled = style_right(table_df, num_cols=["Amount"]).apply(highlight_by_remark, axis=1)
                     st.dataframe(styled, use_container_width=True, height=420)
                 
