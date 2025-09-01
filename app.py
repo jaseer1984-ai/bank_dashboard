@@ -13,16 +13,14 @@
 # - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
 # - Fixed bug where tab focus jumped on filter change by adding stable keys.
 # - Updates:
+#   • All KPI figures in tabs now use the card model
 #   • Export LC: Advising Bank filter, L/C No in table, Status as tabs, day-first parsing, DD-MM-YYYY display,
 #                and “Accepted (Maturity in current month)” KPI
 #   • Supplier Payments: robust parser (no .str.trim), no NaN text in tables
-#   • Settlements: robust date-col detection (incl. NEW MATURITY DATE), day-first parsing, normalized statuses
-#   • Bank Balance: robust parser with fallback (tab won’t disappear)
+#   • Settlements: robust date-col detection (incl. NEW MATURITY DATE), day-first parsing, normalized statuses, 2-color highlight on remarks
+#   • Bank Balance: robust parser with fallback (tab won’t disappear), red highlighting of negative numbers in cards
 #   • Tables: remove “NAN/NaN/nan/None/null/NaT/NA/N/A” placeholders from display
-#   • Bank Balance card: negative Available and After Settlement values highlighted in red
-#   • Overview > LCR & STL Settlements KPIs restored to gradient card model
-#   • Weekly Settlement Schedule tooltip values formatted with commas
-#   • Settlements tab tables highlighted in 2 colors based on remarks (present vs blank)
+#   • Weekly Settlement Schedule tooltip formatted with commas
 
 import io
 import time
@@ -137,6 +135,25 @@ st.markdown(f"""
   .section-chip {{
     display:inline-block; padding:6px 12px; border-radius:10px;
     background:{THEME['heading_bg']}; color:#0f172a; font-weight:700;
+  }}
+  .kpi-card {{
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 18px;
+    text-align: center;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 8px rgba(0,0,0,.04);
+  }}
+  .kpi-label {{
+    font-size: 13px;
+    color: #475569;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }}
+  .kpi-value {{
+    font-size: 26px;
+    font-weight: 800;
+    color: #1e293b;
   }}
   [data-testid="stTabs"] button[role="tab"] {{ border-radius: 8px !important; margin-right: 6px !important; font-weight: 700 !important; }}
   [data-testid="stTabs"] button[role="tab"]:nth-child(1) {{ background:#e0e7ff; color:#1e293b; }}
@@ -595,7 +612,11 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
                 rate_val = _to_number(row[curr_col])
                 if pd.notna(rate_val) and rate_val > 0:
                     currency_pair = f"{curr_col.upper()}/SAR"
-                    result_rows.append({"currency_pair": currency_pair, "rate": rate_val, "date": date_val})
+                    result_rows.append({
+                        "currency_pair": currency_pair,
+                        "rate": rate_val,
+                        "date": date_val
+                    })
         if not result_rows:
             return pd.DataFrame()
         out = pd.DataFrame(result_rows).sort_values(["currency_pair", "date"])
@@ -802,7 +823,6 @@ def main():
     df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
     df_fx = parse_exchange_rates(df_fx_raw)
     
-    # Load Export LC data
     df_export_lc_raw = read_excel_all_sheets(LINKS["EXPORT_LC"])
     df_export_lc = parse_export_lc(df_export_lc_raw)
 
@@ -887,7 +907,6 @@ def main():
 
         st.markdown('<span class="section-chip">📅 Month-to-Date — Detailed Insights</span>', unsafe_allow_html=True)
 
-        # Liquidity MTD
         c1, c2 = st.columns([3, 2])
         with c1:
             st.subheader("Total Liquidity — MTD")
@@ -948,11 +967,10 @@ def main():
 
         st.markdown("---")
 
-        # LCR & STL Settlements — Overview (CARD MODEL RESTORED)
         st.markdown('<span class="section-chip">📅 LCR & STL Settlements — Overview</span>', unsafe_allow_html=True)
         st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
         st.markdown('<div style="background:#f1f5f9;padding:12px;border-radius:8px;border-left:4px solid #3b82f6;margin-bottom:16px;"><small>📊 <strong>Metrics show ALL settlements</strong> | 📈 <strong>Chart & table show current month only</strong></small></div>', unsafe_allow_html=True)
-
+        
         if df_lc.empty and df_lc_paid.empty:
             st.info("No LCR & STL data.")
         else:
@@ -1026,12 +1044,10 @@ def main():
                         unsafe_allow_html=True
                     )
 
-                # Weekly chart for current month (Plotly with comma-formatted tooltip)
                 if not lc_m.empty:
-                    weekly = (lc_m
-                              .assign(week=lambda df_: df_["settlement_date"].dt.isocalendar().week.astype(int))
-                              .groupby("week", as_index=False)["amount"].sum()
-                              .sort_values("week"))
+                    lc_m["week"] = lc_m["settlement_date"].dt.isocalendar().week.astype(int)
+                    weekly = lc_m.groupby("week", as_index=False)["amount"].sum().sort_values("week")
+                    st.markdown("### 📊 Weekly Settlement Schedule")
                     try:
                         import plotly.graph_objects as go
                         fig = go.Figure(go.Bar(
@@ -1055,7 +1071,6 @@ def main():
 
         st.markdown("---")
 
-        # FX MTD
         if st.session_state.get("show_fx", True) and not df_fx.empty:
             st.subheader("Exchange Rates — Month Overview")
             fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy()
@@ -1074,7 +1089,6 @@ def main():
             else:
                 st.info("No FX data for current month.")
 
-        # Export LC summary by branch
         st.markdown('<span class="section-chip">🚢 Export LC — Summary by Branch</span>', unsafe_allow_html=True)
         try:
             if df_export_lc.empty:
@@ -1254,14 +1268,35 @@ def main():
                 
                 if settlement_view == "Summary + Table":
                     cc1, cc2, cc3 = st.columns(3)
-                    with cc1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
-                    with cc2: st.metric(f"Number of {status_label}", len(view_data))
+                    with cc1:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Total {status_label} Amount</div>
+                                <div class="kpi-value">{fmt_number_only(view_data["amount"].sum())}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True)
+                    with cc2:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Number of {status_label}</div>
+                                <div class="kpi-value">{len(view_data)}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True)
                     if status_label == "Pending":
-                        with cc3: st.metric("Urgent (2 days)", len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
-                    else:
-                        with cc3: st.metric("Urgent (2 days)", 0)
+                        with cc3:
+                            st.markdown(
+                                f"""
+                                <div class="kpi-card">
+                                    <div class="kpi-label">Urgent (2 days)</div>
+                                    <div class="kpi-value">{len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)])}</div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True)
 
-                    # Build table and highlight by remarks
                     viz = view_data.copy()
                     viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
                     rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status",
@@ -1274,9 +1309,9 @@ def main():
                     def highlight_by_remark(row):
                         r = str(row.get("Remark", "")).strip().upper()
                         if r and r not in ("-", "NAN", "NONE", "NULL"):
-                            return ['background-color: #fef3c7'] * len(row)  # amber for present remark (current due)
+                            return ['background-color: #fef3c7'] * len(row)
                         else:
-                            return ['background-color: #fee2e2'] * len(row)  # red for blank remark (balance due)
+                            return ['background-color: #fee2e2'] * len(row)
                     styled = style_right(table_df, num_cols=["Amount"]).apply(highlight_by_remark, axis=1)
                     st.dataframe(styled, use_container_width=True, height=420)
                 
@@ -1332,13 +1367,37 @@ def main():
                                         index=0, horizontal=True, key=f"payment_view_{key_suffix}")
                 if payment_view == "Summary + Table":
                     c1, c2, c3 = st.columns(3)
-                    with c1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
-                    with c2: st.metric("Number of Payments", len(view_data))
-                    with c3: st.metric("Average Payment", fmt_number_only(view_data["amount"].mean()))
+                    with c1:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Total {status_label} Amount</div>
+                                <div class="kpi-value">{fmt_number_only(view_data["amount"].sum())}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True)
+                    with c2:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Number of Payments</div>
+                                <div class="kpi-value">{len(view_data)}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True)
+                    with c3:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Average Payment</div>
+                                <div class="kpi-value">{fmt_number_only(view_data["amount"].mean())}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True)
+                    st.markdown("**📊 Summary by Bank**")
                     grp = (view_data.groupby("bank", as_index=False)["amount"]
                            .sum().sort_values("amount", ascending=False)
                            .rename(columns={"bank": "Bank", "amount": "Amount"}))
-                    st.markdown("**📊 Summary by Bank**")
                     st.dataframe(style_right(grp, num_cols=["Amount"]), use_container_width=True, height=220)
                     st.markdown("**📋 Detailed Payment List**")
                     show_cols = [c for c in ["bank", "supplier", "currency", "amount", "status"] if c in view_data.columns]
@@ -1415,15 +1474,29 @@ def main():
 
                     st.markdown("---")
                     m1, m2 = st.columns(2)
-                    total_value = filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0
-                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-
-                    accepted_month_sum = 0.0
-                    if not filtered_df.empty and {'status','maturity_date','value_sar'}.issubset(filtered_df.columns):
-                        mask_acc = filtered_df['status'].astype(str).str.upper() == 'ACCEPTED'
-                        mask_mat = filtered_df['maturity_date'].dt.to_period('M') == current_period
-                        accepted_month_sum = float(filtered_df.loc[mask_acc & mask_mat, 'value_sar'].sum())
-                    m2.metric(f"Accepted (Maturity in {current_month_label})", fmt_number_only(accepted_month_sum))
+                    with m1:
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Total Value (SAR)</div>
+                                <div class="kpi-value">{fmt_number_only(filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0)}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True)
+                    with m2:
+                        accepted_month_sum = 0.0
+                        if not filtered_df.empty and {'status','maturity_date','value_sar'}.issubset(filtered_df.columns):
+                            mask_acc = filtered_df['status'].astype(str).str.upper() == 'ACCEPTED'
+                            mask_mat = filtered_df['maturity_date'].dt.to_period('M') == current_period
+                            accepted_month_sum = float(filtered_df.loc[mask_acc & mask_mat, 'value_sar'].sum())
+                        st.markdown(
+                            f"""
+                            <div class="kpi-card">
+                                <div class="kpi-label">Accepted (Maturity in {current_month_label})</div>
+                                <div class="kpi-value">{fmt_number_only(accepted_month_sum)}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True)
 
                     st.markdown("#### Summary by Branch")
                     if not filtered_df.empty and {'branch','value_sar'}.issubset(filtered_df.columns):
@@ -1444,7 +1517,7 @@ def main():
                     else:
                         st.info("No records to summarize for the selected filters.")
 
-                    # Detailed table (clean remarks)
+                    # Detailed table
                     st.markdown("#### Detailed View")
                     display_cols = {
                         'branch': 'Branch',
@@ -1473,7 +1546,7 @@ def main():
     with tab_fx:
         st.markdown('<span class="section-chip">💱 Exchange Rates</span>', unsafe_allow_html=True)
         if df_fx.empty:
-            st.info("No exchange rate data available. Ensure the Exchange Rate sheet has the required columns (Currency Pair, Rate, Date).")
+            st.info("No exchange rate data available.")
         else:
             fx_view = st.radio("Display as:", options=["Current Rates", "Rate Trends", "Volatility Analysis", "Table View"],
                               index=0, horizontal=True, key="fx_view")
