@@ -1599,10 +1599,6 @@ with tab_export_lc:
             height=500
         )
 
-
-
----
-
 ### Summary of changes in the Export LC tab:
 
 - Added a **3-column layout** for filters: Branch, Issuing Bank, Submitted Date range.
@@ -1865,6 +1861,7 @@ If you want me to provide the **full entire script** with this integrated (not j
 
 if __name__ == "__main__":
     main()
+
 
 
 
