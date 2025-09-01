@@ -1,4 +1,3 @@
-```python
 # -*- coding: utf-8 -*-
 # app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab, Export LC Tab)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
@@ -523,14 +522,18 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                    next((c for c in d.columns if "due" in c and "date" in c), None) or \
                    next((c for c in d.columns if c.strip().lower() == "date"), None)
 
+        # Direct column mapping for Amount SAR and Status
         amount_col = None
         status_col = None
-
+        
+        # Find amount column - look for "amount sar"
         for col in d.columns:
             col_lower = str(col).strip().lower()
             if "amount" in col_lower and "sar" in col_lower:
                 amount_col = col
                 break
+        
+        # If not found, try other patterns
         if not amount_col:
             amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
                          next((c for c in d.columns if "currently" in c and "due" in c), None) or \
@@ -538,6 +541,7 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                          next((c for c in ["amount(sar)", "amount sar", "amount", "value"] if c in d.columns), None) or \
                          next((c for c in d.columns if "amount" in c), None)
 
+        # Find status column
         for col in d.columns:
             col_lower = str(col).strip().lower()
             if "status" in col_lower:
@@ -564,8 +568,10 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
 
+        # Separate pending and closed/paid settlements
         df_pending = pd.DataFrame()
         df_paid = pd.DataFrame()
+        
         if status_col:
             df_pending = out[out["status"].str.upper().str.strip() == "PENDING"].copy()
             df_paid = out[out["status"].str.upper().str.strip() == "CLOSED"].copy()
@@ -1159,6 +1165,7 @@ def main():
                 st.info("No Export LC data available.")
             else:
                 elc_data = df_export_lc.copy()
+                # Prefer MTD; fallback to ALL
                 elc_mtd = pd.DataFrame()
                 if "submitted_date" in elc_data.columns:
                     elc_mtd = elc_data[
@@ -1303,7 +1310,7 @@ def main():
         st.markdown("---")
         st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
         if df_cvp.empty:
-            st.info("No data in 'Collection vs Payments by Branch'. Make sure the sheet has 'Branch', 'Collection', 'Payments'.")
+            st.info("No data in \'Collection vs Payments by Branch\'. Make sure the sheet has \'Branch\', \'Collection\', \'Payments\'.")
         else:
             cvp_view = st.radio("", options=["Bars", "Table", "Cards"], index=0, horizontal=True, label_visibility="collapsed")
             cvp_sorted = df_cvp.sort_values("net", ascending=False).reset_index(drop=True)
@@ -1328,10 +1335,8 @@ def main():
                 tbl = cvp_sorted.rename(columns={"branch": "Branch", "collection": "Collection", "payments": "Payments", "net": "Net"})
                 styled = style_right(tbl, num_cols=["Collection", "Payments", "Net"])
                 def _net_red(val):
-                    try: 
-                        return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
-                    except Exception: 
-                        return ''
+                    try: return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
+                    except Exception: return ''
                 styled = styled.applymap(_net_red, subset=["Net"])
                 st.dataframe(styled, use_container_width=True, height=420)
             else:
@@ -1485,7 +1490,7 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Export LC tab (filters and Detailed View with Advising Bank & Search)
+    # ---- Export LC tab (new position, new filter) ----
     with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
@@ -1502,9 +1507,6 @@ def main():
                     selected_statuses = st.multiselect("Filter by Status", options=statuses, default=statuses, key="export_lc_status_filter")
                 else:
                     selected_statuses = []
-                
-                # NEW: Search by Advising Bank (case-insensitive contains)
-                search_advising = st.text_input("Search by Advising Bank", value="", key="export_lc_adv_search")
 
             with col2:
                 min_date = df_export_lc["submitted_date"].min().date()
@@ -1521,12 +1523,7 @@ def main():
             date_mask = (filtered_df["submitted_date"].dt.date >= start_date_filter) & (filtered_df["submitted_date"].dt.date <= end_date_filter)
             no_date_mask = filtered_df["submitted_date"].isna()
             filtered_df = filtered_df[date_mask | no_date_mask].copy()
-
-            # Apply Advising Bank search filter
-            if 'advising_bank' in filtered_df.columns and search_advising.strip():
-                q = search_advising.strip()
-                filtered_df = filtered_df[filtered_df["advising_bank"].astype(str).str.contains(q, case=False, na=False)]
-
+            
             # Display metrics (without average)
             st.markdown("---")
             m1, m2 = st.columns(2)
@@ -1556,13 +1553,13 @@ def main():
             else:
                 st.info("No records to summarize for the selected filters.")
 
-            # Detailed table (uses Advising Bank instead of Issuing Bank)
+            # Detailed table
             st.markdown("#### Detailed View")
             display_cols = {
                 'branch': 'Branch',
                 'applicant': 'Applicant',
                 'lc_no': 'LC No.',
-                'advising_bank': 'Advising Bank',  # CHANGED
+                'issuing_bank': 'Issuing Bank',
                 'submitted_date': 'Submitted Date',
                 'maturity_date': 'Maturity Date',
                 'value_sar': 'Value (SAR)',
@@ -1571,6 +1568,7 @@ def main():
             }
             
             cols_to_show = {k: v for k, v in display_cols.items() if k in filtered_df.columns}
+            
             table_view = filtered_df[list(cols_to_show.keys())].rename(columns=cols_to_show)
             
             # Safely format date columns
@@ -1824,6 +1822,11 @@ def main():
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
 
+    if st.session_state.get("auto_refresh"):
+        interval = int(st.session_state.get("auto_interval", 120))
+        with st.status(f"Auto refreshing in {interval}s…", expanded=False):
+            time.sleep(interval)
+        st.rerun()
+
 if __name__ == "__main__":
     main()
-```
