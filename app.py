@@ -22,6 +22,7 @@
 #   • Bank Balance: robust parser with fallback, red highlighting of negative numbers in cards
 #   • Tables: remove “NAN/NaN/nan/None/null/NaT/NA/N/A” placeholders from display
 #   • Weekly Settlement Schedule tooltip formatted with commas
+#   • Restored helper functions to fix Progress by Urgency/Mini Cards errors in all tabs
 
 import io
 import time
