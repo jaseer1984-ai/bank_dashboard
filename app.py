@@ -1491,8 +1491,7 @@ def main():
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
     # ---- Export LC tab (new position, new filter) ----
-    Certainly! I've updated the **Export LC** tab section in your code to:
-
+    
 - Show **L/C No.** instead of **Issuing Bank** in the detailed table.
 - Replace the **Status** filter dropdown with **Status** tabs.
 - Add a new filter for **Issuing Bank**.
@@ -1881,4 +1880,5 @@ If you want me to provide the **full entire script** with this integrated (not j
 
 if __name__ == "__main__":
     main()
+
 
