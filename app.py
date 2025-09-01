@@ -1531,24 +1531,41 @@ def main():
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
     # ---- Export LC tab (updated: status tabs, issuing bank filter, L/C No + Advising Bank in table) ----
+Perfect ✅ thanks for clarifying!  
+We’ll make **two small but important adjustments** inside the **Export LC tab** section (`with tab_export_lc:`):
+
+### 1. Change filter dropdown:
+👉 Replace **"Issuing Bank"** filter with **"Advising Bank"** filter.
+
+### 2. Metric card adjustment:
+👉 Remove **"Total LCs" count metric**.  
+👉 Show instead: **Accepted LC total (sum of SAR values) for current month based on maturity date**.  
+- It will check all rows where `status == "ACCEPTED"` and `maturity_date` falls within the **current month**, then sum `value_sar`.  
+
+---
+
+Here is the corrected snippet (only the **Export LC tab section** changed):
+
+```python
+    # ---- Export LC tab (updated: advising bank filter, accepted MTD maturity sum KPI) ----
     with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
         else:
-            # Create filters (Branch, Issuing Bank, Date)
+            # Create filters (Branch, Advising Bank, Date)
             col1, col2 = st.columns(2)
             with col1:
                 branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
                 selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
             with col2:
-                issuing_banks = sorted(df_export_lc["issuing_bank"].dropna().astype(str).unique()) if "issuing_bank" in df_export_lc.columns else []
-                if issuing_banks:
-                    selected_issuing_banks = st.multiselect("Filter by Issuing Bank", options=issuing_banks, default=issuing_banks, key="export_lc_issuing_filter")
+                advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique()) if "advising_bank" in df_export_lc.columns else []
+                if advising_banks:
+                    selected_advising_banks = st.multiselect("Filter by Advising Bank", options=advising_banks, default=advising_banks, key="export_lc_advising_filter")
                 else:
-                    selected_issuing_banks = []
+                    selected_advising_banks = []
 
-            # Dates (safe defaults even if all NaT)
+            # Dates (safe defaults)
             sub_dates = df_export_lc["submitted_date"].dropna() if "submitted_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
             min_date_default = (sub_dates.min().date() if not sub_dates.empty else (datetime.today().date().replace(day=1)))
             max_date_default = (sub_dates.max().date() if not sub_dates.empty else datetime.today().date())
@@ -1558,10 +1575,10 @@ def main():
             with d2:
                 end_date_filter = st.date_input("To Submitted Date", value=max_date_default, key="export_lc_end_date")
 
-            # Apply branch + issuing bank filters first
+            # Apply branch + advising bank filters first
             filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
-            if selected_issuing_banks and "issuing_bank" in filtered_df_base.columns:
-                filtered_df_base = filtered_df_base[filtered_df_base["issuing_bank"].isin(selected_issuing_banks)]
+            if selected_advising_banks and "advising_bank" in filtered_df_base.columns:
+                filtered_df_base = filtered_df_base[filtered_df_base["advising_bank"].isin(selected_advising_banks)]
 
             # Apply date filter (keep rows with no submitted_date)
             if "submitted_date" in filtered_df_base.columns:
@@ -1585,9 +1602,23 @@ def main():
 
                     # KPIs
                     st.markdown("---")
+                    
+                    # Total Value metric
+                    total_value = filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0
+                    # Accepted LCs current month maturity sum
+                    accepted_mtd_value = 0.0
+                    if not filtered_df.empty and {'status','maturity_date','value_sar'}.issubset(filtered_df.columns):
+                        now = pd.Timestamp.now()
+                        start_month = now.replace(day=1)
+                        end_month = (start_month + pd.offsets.MonthEnd(1))
+                        mask = (filtered_df['status'] == 'ACCEPTED') & \
+                               (filtered_df['maturity_date'].notna()) & \
+                               (filtered_df['maturity_date'].between(start_month, end_month))
+                        accepted_mtd_value = filtered_df.loc[mask, 'value_sar'].sum()
+
                     m1, m2 = st.columns(2)
-                    m1.metric("Total Value (SAR)", fmt_number_only(filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0))
-                    m2.metric("Total LCs", len(filtered_df))
+                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
 
                     # Summary by Branch
                     st.markdown("#### Summary by Branch")
@@ -1612,7 +1643,7 @@ def main():
                     else:
                         st.info("No records to summarize for the selected filters.")
 
-                    # Detailed table (includes L/C No and Advising Bank (instead of Issuing Bank))
+                    # Detailed table (includes L/C No and Advising Bank)
                     st.markdown("#### Detailed View")
                     display_cols = {
                         'branch': 'Branch',
@@ -1628,7 +1659,6 @@ def main():
                     cols_to_show = [k for k in display_cols.keys() if k in filtered_df.columns]
                     if cols_to_show:
                         table_view = filtered_df[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
-                        # Safely format date columns
                         if 'Submitted Date' in table_view.columns:
                             table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
                         if 'Maturity Date' in table_view.columns:
@@ -1888,3 +1918,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
