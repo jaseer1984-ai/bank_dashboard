@@ -18,7 +18,7 @@
 #   • Supplier Payments: robust parser (no .str.trim), no NaN text in tables
 #   • Settlements: robust date-col detection (incl. NEW MATURITY DATE), day-first parsing, normalized statuses
 #   • Bank Balance: robust parser with fallback (tab won’t disappear)
-#   • Tables: remove “NAN/NaN/nan/None/null/NaT” placeholders from display
+#   • Tables: remove “NAN/NaN/nan/None/null/NaT/NA/N/A” placeholders from display
 #   • Bank Balance card: negative Available and After Settlement values highlighted in red
 
 import io
@@ -261,12 +261,11 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
     return styler
 
 def tidy_display(df: pd.DataFrame) -> pd.DataFrame:
-    """Replace NaN-like text with blanks for clean display."""
+    """Replace NaN-like text with blanks for nice display."""
     if df is None or df.empty: return df
     out = df.copy()
-    # Replace placeholders (strings) and NaTs
     out = out.replace({np.nan: ""})
-    out = out.replace(to_replace=r'^\s*(nan|none|null|nat)\s*$', value="", regex=True)
+    out = out.replace(to_replace=r'(?i)^\s*(nan|none|null|nat|na|n/a)\s*$', value="", regex=True)
     return out
 
 # ----------------------------
@@ -644,7 +643,8 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'remarks': 'remarks',
             'branch': 'branch'
         }
-        if lc_no_col: rename_map[lc_no_col] = 'lc_no'
+        if lc_no_col:
+            rename_map[lc_no_col] = 'lc_no'
 
         d = d.rename(columns=rename_map)
 
@@ -1067,7 +1067,6 @@ def main():
                     with cols[int(i) % 4]:
                         bal = row.get('balance', np.nan)
                         after = row.get('after_settlement', np.nan)
-                        # red if negative for both
                         bal_color = THEME["amount_color"]["neg"] if pd.notna(bal) and bal < 0 else THEME["amount_color"]["pos"]
                         after_color = THEME["amount_color"]["neg"] if pd.notna(after) and after < 0 else "#065f46"
                         after_line = ""
@@ -1097,6 +1096,74 @@ def main():
                 table = table.rename(columns=rename_map)
                 st.dataframe(style_right(table, num_cols=[c for c in ["Balance","After Settlement"] if c in table.columns]),
                              use_container_width=True, height=360)
+
+        st.markdown("---")
+        st.markdown('<span class="section-chip">📈 Liquidity Trend Analysis</span>', unsafe_allow_html=True)
+        if df_fm.empty:
+            st.info("No liquidity data available.")
+        else:
+            try:
+                import plotly.io as pio, plotly.graph_objects as go
+                if "brand" not in pio.templates:
+                    pio.templates["brand"] = pio.templates["plotly_white"]
+                latest_liquidity = df_fm.iloc[-1]["total_liquidity"]
+                if len(df_fm) > 1:
+                    prev = df_fm.iloc[-2]["total_liquidity"]
+                    trend_change = latest_liquidity - prev
+                    trend_pct = (trend_change / prev) * 100 if prev != 0 else 0
+                    trend_text = f"{'📈' if trend_change > 0 else '📉'} {trend_pct:+.1f}%"
+                else:
+                    trend_text = "No trend data"
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=df_fm["date"], y=df_fm["total_liquidity"], mode='lines+markers', line=dict(width=3), marker=dict(size=6)))
+                    fig.update_layout(template="plotly_white", title="Total Liquidity Trend",
+                                      xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
+                                      margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+                    fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
+                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                with c2:
+                    st.markdown("### 📊 Liquidity Metrics")
+                    st.metric("Current", fmt_number_only(latest_liquidity))
+                    if len(df_fm) > 1: st.metric("Trend", trend_text)
+                    st.markdown("**Statistics (30d)**")
+                    last30 = df_fm.tail(30)
+                    st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
+                    st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
+                    st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
+            except Exception:
+                st.error("❌ Unable to display liquidity trend analysis")
+                st.line_chart(df_fm.set_index("date")["total_liquidity"])
+
+        st.markdown("---")
+        st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
+        if df_cvp.empty:
+            st.info("No data in 'Collection vs Payments by Branch'.")
+        else:
+            cvp_view = st.radio("", options=["Bars", "Table", "Cards"], index=0, horizontal=True, label_visibility="collapsed")
+            cvp_sorted = df_cvp.sort_values("net", ascending=False).reset_index(drop=True)
+            if cvp_view == "Bars":
+                try:
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    fig.add_bar(name="Collection", x=cvp_sorted["branch"], y=cvp_sorted["collection"])
+                    fig.add_bar(name="Payments", x=cvp_sorted["branch"], y=cvp_sorted["payments"])
+                    fig.update_layout(barmode="group", height=420, margin=dict(l=20, r=20, t=30, b=80),
+                                      xaxis_title="Branch", yaxis_title="Amount (SAR)", legend_title_text="")
+                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                except Exception:
+                    st.bar_chart(cvp_sorted.set_index("branch")[["collection", "payments"]])
+            elif cvp_view == "Table":
+                tbl = cvp_sorted.rename(columns={"branch": "Branch", "collection": "Collection", "payments": "Payments", "net": "Net"})
+                styled = style_right(tbl, num_cols=["Collection", "Payments", "Net"])
+                def _net_red(val):
+                    try: return 'color:#b91c1c;font-weight:700;' if float(val) < 0 else ''
+                    except Exception: return ''
+                styled = styled.applymap(_net_red, subset=["Net"])
+                st.dataframe(styled, use_container_width=True, height=420)
+            else:
+                display_as_mini_cards(cvp_sorted.rename(columns={"net":"balance"}), "branch", "balance", pad=pad, radius=radius, shadow=shadow)
 
     # ---- Settlements tab ----
     with tab_settlements:
@@ -1309,7 +1376,7 @@ def main():
                     else:
                         st.info("No records to summarize for the selected filters.")
 
-                    # Detailed table
+                    # Detailed table (clean remarks)
                     st.markdown("#### Detailed View")
                     display_cols = {
                         'branch': 'Branch',
@@ -1337,7 +1404,6 @@ def main():
     # ---- Exchange Rates tab ----
     with tab_fx:
         st.markdown('<span class="section-chip">💱 Exchange Rates</span>', unsafe_allow_html=True)
-        
         if df_fx.empty:
             st.info("No exchange rate data available. Ensure the Exchange Rate sheet has the required columns (Currency Pair, Rate, Date).")
         else:
