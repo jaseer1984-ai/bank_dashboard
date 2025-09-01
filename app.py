@@ -1570,6 +1570,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-If the Settlements sheet uses a specific header like “NEW MATURITY DATE” only, the new parser now picks it up and parses dates day-first, so rows aren’t dropped. If you still see empty data, please share the exact header names for date and amount columns from the Settlements sheet, and I’ll tailor the detection rules further.
-
