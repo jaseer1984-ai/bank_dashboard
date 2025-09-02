@@ -19,6 +19,7 @@
 # - UPDATE: Removed auto refresh.
 # - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
 # - UPDATE: Export LC Detailed View table now displays 'Maturity Date' (formatted DD-MM-YYYY) and excludes 'Submitted Date'.
+# - FIX: Ensured 'Maturity Date' column is explicitly included and correctly formatted in Export LC Detailed View.
 
 import io
 import time
@@ -703,7 +704,11 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'submitted date': 'submitted_date',
             'value (sar)': 'value_sar',
             'payment term (days)': 'payment_term_days',
-            'maturity date': 'maturity_date', # Column from source Excel
+            # Robustly map 'maturity date' and its variations
+            'maturity date': 'maturity_date',
+            'date of maturity': 'maturity_date',
+            'due date': 'maturity_date',
+            'lc maturity date': 'maturity_date',
             'status': 'status',
             'remarks': 'remarks',
             'branch': 'branch',
@@ -736,7 +741,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
         if 'status' in d.columns:
             d['status'] = d['status'].astype(str).str.strip().str.upper()
 
-        # Keep rows with a value and branch; allow missing submitted_date
+        # Keep rows with a valid value and branch; allow missing submitted_date/maturity_date
         required = [col for col in ['value_sar', 'branch'] if col in d.columns]
         out = d.dropna(subset=required)
         return out
@@ -1610,8 +1615,10 @@ def main():
                     _tmp = locals().get("filtered_df", None)
                     table_base = _tmp.copy() if _tmp is not None else filtered_df_base.copy()
 
+                    # Apply table-specific Maturity Date filters if column exists
                     if 'maturity_date' in table_base.columns:
                         mdates = pd.to_datetime(table_base['maturity_date'], errors='coerce')
+                        # Ensure no timezone issues
                         try:
                             mdates = mdates.dt.tz_localize(None)
                         except Exception:
@@ -1619,6 +1626,7 @@ def main():
                                 mdates = mdates.dt.tz_convert(None)
                             except Exception:
                                 pass
+                        
                         default_m_start = (mdates.dropna().min().normalize().date() if mdates.notna().any() else datetime.today().date().replace(day=1))
                         default_m_end = (mdates.dropna().max().normalize().date() if mdates.notna().any() else datetime.today().date())
                         dmt1, dmt2 = st.columns(2)
@@ -1635,55 +1643,53 @@ def main():
                                 key=f"export_lc_table_mend_{status_key}"
                             )
                         # Filter by normalized day; keep rows with no maturity_date
-                        maturity_ts = pd.to_datetime(table_base["maturity_date"], errors='coerce')
-                        try:
-                            maturity_ts = maturity_ts.dt.tz_localize(None)
-                        except Exception:
-                            try:
-                                maturity_ts = maturity_ts.dt.tz_convert(None)
-                            except Exception:
-                                pass
-                        maturity_norm = maturity_ts.dt.normalize()
+                        maturity_norm = mdates.dt.normalize()
                         start_ts = pd.to_datetime(mat_start)
                         end_ts = pd.to_datetime(mat_end)
                         in_range = maturity_norm.between(start_ts, end_ts)
                         table_base = table_base[maturity_norm.isna() | in_range].copy()
 
-                    # Detailed table columns: 'Maturity Date' is included, 'Submitted Date' is NOT.
-                    display_cols = {
-                        'branch': 'Branch',
-                        'applicant': 'Applicant',
-                        'lc_no': 'L/C No',
-                        'advising_bank': 'Advising Bank',
-                        # 'submitted_date': 'Submitted Date', # Excluded from this table view
-                        'maturity_date': 'Maturity Date',    # Explicitly included here
-                        'value_sar': 'Value (SAR)',
-                        'maturing_current_month': 'Maturing Current Month', 
-                        'status': 'Status',
-                        'remarks': 'Remarks'
-                    }
-                    cols_to_show = [k for k in display_cols.keys() if k in table_base.columns]
-                    if cols_to_show:
-                        table_view = table_base[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
+                    # Define the desired order and display names of columns for the detailed table
+                    # Ensure 'maturity_date' is explicitly included, 'submitted_date' is not.
+                    desired_columns_info = [
+                        ('branch', 'Branch'),
+                        ('applicant', 'Applicant'),
+                        ('lc_no', 'L/C No'),
+                        ('advising_bank', 'Advising Bank'),
+                        ('maturity_date', 'Maturity Date'), # Explicitly included
+                        ('value_sar', 'Value (SAR)'),
+                        ('maturing_current_month', 'Maturing Current Month'), 
+                        ('status', 'Status'),
+                        ('remarks', 'Remarks')
+                    ]
+                    
+                    # Filter for columns that actually exist in the table_base DataFrame
+                    # and create the list of columns to show, and their display names
+                    cols_to_show_internal = [col_name for col_name, _ in desired_columns_info if col_name in table_base.columns]
+                    display_name_map = {col_name: display_name for col_name, display_name in desired_columns_info if col_name in table_base.columns}
 
-                        # Format Maturity Date as DD-MM-YYYY (and handle NaT to empty string)
+                    if cols_to_show_internal:
+                        table_view = table_base[cols_to_show_internal].copy()
+                        table_view = table_view.rename(columns=display_name_map)
+
+                        # Format 'Maturity Date' to DD-MM-YYYY and replace NaT with empty string
                         if 'Maturity Date' in table_view.columns:
-                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce').dt.strftime('%d-%m-%Y')
-                            table_view['Maturity Date'] = table_view['Maturity Date'].replace({pd.NaT: ''}) # Ensure NaT displays as empty
+                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce') \
+                                                             .dt.strftime('%d-%m-%Y') \
+                                                             .replace({pd.NaT: ''}) # Convert NaT to empty string
 
-
-                        # Remove 'None'/'NaT'/'nan' text in other object columns
-                        obj_cols = table_view.select_dtypes(include='object').columns
-                        if len(obj_cols) > 0:
-                            # Apply replacement for all relevant object columns except formatted 'Maturity Date'
-                            cols_to_clean = [col for col in obj_cols if col != 'Maturity Date']
-                            for col in cols_to_clean:
+                        # Clean 'None'/'NaT'/'nan' text from other object columns
+                        obj_cols_to_clean = [col for col in table_view.select_dtypes(include='object').columns if col != 'Maturity Date']
+                        if obj_cols_to_clean:
+                            for col in obj_cols_to_clean:
                                 table_view[col] = (
                                     table_view[col]
-                                    .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''})
+                                    .astype(str) # Ensure it's string type for replace/fillna
+                                    .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''}, regex=True)
                                     .fillna('')
                                 )
                         
+                        # Identify numeric columns for right alignment and formatting
                         num_cols = [c for c in ['Value (SAR)', 'Maturing Current Month'] if c in table_view.columns]
 
                         st.dataframe(
@@ -1692,7 +1698,7 @@ def main():
                             height=500
                         )
                     else:
-                        st.info("No columns available for detailed view.")
+                        st.info("No columns available for detailed view after applying filters.")
 
     # ---- Exchange Rates tab ----
     with tab_fx:
