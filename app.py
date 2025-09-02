@@ -1691,13 +1691,6 @@ def main():
                         m1, m2 = st.columns(2)
                         m1.metric("Total Value (SAR)", fmt_number_only(total_value))
                         m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                    elif status_key in HIDE_ACCEPTED_TABS:
-                        # hide it on ACCEPTANCE PENDING, COLLECTED, UNDER PROCESS
-                        st.metric("Total Value (SAR)", fmt_number_only(total_value))
-
-                    else:
-                        # fallback for any other status
-                        st.metric("Total Value (SAR)", fmt_number_only(total_value))
                     elif status_key in ("COLLECTED", "UNDER PROCESS"):
                         # hide the Accepted metric on these tabs
                         st.metric("Total Value (SAR)", fmt_number_only(total_value))
@@ -2068,8 +2061,6 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
-
-
 
 
 
