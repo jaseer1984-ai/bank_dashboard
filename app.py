@@ -1495,7 +1495,7 @@ def main():
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
     # ---- Export LC tab ----
-    with tab_export_lc:
+        with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
@@ -1503,7 +1503,7 @@ def main():
             # Filters: Branch, Advising Bank, Maturity Date (top-level)
             col1, col2 = st.columns(2)
              
-    with col1:
+        with col1:
             branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
             branch_options = ["All"] + branches
             branch_choice = st.radio(
@@ -1515,7 +1515,7 @@ def main():
             )
             selected_branches = branches if branch_choice == "All" else [branch_choice]
         
-   with col2:
+       with col2:
             advising_banks = (
                 sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
                 if "advising_bank" in df_export_lc.columns else []
@@ -1968,6 +1968,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
