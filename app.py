@@ -1495,43 +1495,32 @@ def main():
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
     # ---- Export LC tab ----
-        with tab_export_lc:
+    with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
         else:
             # Filters: Branch, Advising Bank, Maturity Date (top-level)
             col1, col2 = st.columns(2)
-             
-        with col1:
-            branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
-            branch_options = ["All"] + branches
-            branch_choice = st.radio(
-                "Filter by Branch",
-                options=branch_options,
-                index=0,
-                horizontal=True,
-                key="export_lc_branch_radio",
-            )
-            selected_branches = branches if branch_choice == "All" else [branch_choice]
-        
-       with col2:
-            advising_banks = (
-                sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
-                if "advising_bank" in df_export_lc.columns else []
-            )
-            if advising_banks:
-                adv_options = ["All"] + advising_banks
-                adv_choice = st.radio(
-                    "Filter by Advising Bank",
-                    options=adv_options,
-                    index=0,
-                    horizontal=True,
-                    key="export_lc_advising_radio",
-                )
-                selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
-            else:
-                selected_advising_banks = []
+            with col1:
+                branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
+                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
+            with col2:
+                advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique()) if "advising_bank" in df_export_lc.columns else []
+                if advising_banks:
+                    selected_advising_banks = st.multiselect("Filter by Advising Bank", options=advising_banks, default=advising_banks, key="export_lc_advising_filter")
+                else:
+                    selected_advising_banks = []
+
+            # Maturity Date filters (replacing Submitted Date, keep rows with no maturity_date)
+            mat_dates = df_export_lc["maturity_date"].dropna() if "maturity_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
+            min_mat_default = (mat_dates.min().date() if not mat_dates.empty else (datetime.today().date().replace(day=1)))
+            max_mat_default = (mat_dates.max().date() if not mat_dates.empty else datetime.today().date())
+            d1, d2 = st.columns(2)
+            with d1:
+                start_maturity_filter = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
+            with d2:
+                end_maturity_filter = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
 
             # Apply branch + advising bank filters first
             filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
@@ -1968,8 +1957,3 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
-
-
-
-
-
