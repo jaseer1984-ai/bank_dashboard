@@ -1493,47 +1493,7 @@ def main():
         tab_approved, tab_released = st.tabs(["Approved", "Released"])
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
-
-    # ---- Export LC tab ----
-      # ---- Export LC tab ----
-    with tab_export_lc:
-        st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
-        if df_export_lc.empty:
-            st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
-        else:
-            # Filters: Branch, Advising Bank, Maturity Date (top-level)
-            col1, col2 = st.columns(2)
-
-            with col1:
-                branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
-                branch_options = ["All"] + branches
-                branch_choice = st.radio(
-                    "Filter by Branch",
-                    options=branch_options,
-                    index=0,
-                     key="export_lc_branch_radio_top_v2",  # ← changed
-                    horizontal=True
-                )
-                selected_branches = branches if branch_choice == "All" else [branch_choice]
-
-            with col2:
-                advising_banks = []
-                if "advising_bank" in df_export_lc.columns:
-                    advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
-
-                if advising_banks:
-                    adv_options = ["All"] + advising_banks
-                    adv_choice = st.radio(
-                        "Filter by Advising Bank",
-                        options=adv_options,
-                        index=0,
-                        key="export_lc_advising_radio_top_v2",  # ← changed
-                        horizontal=True
-                    )
-                    selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
-                else:
-                    selected_advising_banks = []
-
+    
             # Maturity Date filters (replacing Submitted Date, keep rows with no maturity_date)
             mat_dates = df_export_lc["maturity_date"].dropna() if "maturity_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
             min_mat_default = (mat_dates.min().date() if not mat_dates.empty else (datetime.today().date().replace(day=1)))
@@ -2061,6 +2021,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
