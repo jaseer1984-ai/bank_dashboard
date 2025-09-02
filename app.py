@@ -14,6 +14,8 @@
 # - Fixed bug where tab focus jumped on filter change by adding stable keys.
 # - UPDATE: Export LC tab now shows L/C No in table, uses Advising Bank instead of Issuing Bank in table,
 #           Status moved to tabs, and added Issuing Bank filter. Parsing of L/C No made robust.
+# - CHANGE: Export LC tab top-level date filters now use Maturity Date (not Submitted Date).
+# - CHANGE: Export LC Detailed View removes 'None'/NaT, adds table-only Maturity Date filters, and formats Maturity Date as DD-MM-YYYY.
 
 import io
 import time
@@ -525,18 +527,15 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                    next((c for c in d.columns if "due" in c and "date" in c), None) or \
                    next((c for c in d.columns if c.strip().lower() == "date"), None)
 
-        # Direct column mapping for Amount SAR and Status
         amount_col = None
         status_col = None
         
-        # Find amount column - look for "amount sar"
         for col in d.columns:
             col_lower = str(col).strip().lower()
             if "amount" in col_lower and "sar" in col_lower:
                 amount_col = col
                 break
         
-        # If not found, try other patterns
         if not amount_col:
             amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
                          next((c for c in d.columns if "currently" in c and "due" in c), None) or \
@@ -544,7 +543,6 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                          next((c for c in ["amount(sar)", "amount sar", "amount", "value"] if c in d.columns), None) or \
                          next((c for c in d.columns if "amount" in c), None)
 
-        # Find status column
         for col in d.columns:
             col_lower = str(col).strip().lower()
             if "status" in col_lower:
@@ -571,7 +569,6 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
 
-        # Separate pending and closed/paid settlements
         df_pending = pd.DataFrame()
         df_paid = pd.DataFrame()
         
@@ -636,10 +633,9 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
             for col in d.columns:
                 if col != date_col and len(col) <= 4 and col.upper() == col:
                     sample_vals = d[col].dropna().head(5)
-                    if not sample_vals.empty:
-                        numeric_count = sum(1 for val in sample_vals if pd.notna(_to_number(val)))
-                        if numeric_count >= len(sample_vals) * 0.8:
-                            currency_cols.append(col)
+                    numeric_count = sum(1 for val in sample_vals if pd.notna(_to_number(val)))
+                    if not sample_vals.empty and numeric_count >= len(sample_vals) * 0.8:
+                        currency_cols.append(col)
         if not currency_cols:
             return pd.DataFrame()
         result_rows = []
@@ -982,13 +978,6 @@ def main():
                     mtd_change_pct = (mtd_change / opening * 100.0) if opening else np.nan
                     fm_m["delta"] = fm_m["total_liquidity"].diff()
                     avg_daily = fm_m["delta"].mean(skipna=True)
-                    best_row = fm_m.loc[fm_m["delta"].idxmax()] if fm_m["delta"].notna().any() else None
-                    worst_row = fm_m.loc[fm_m["delta"].idxmin()] if fm_m["delta"].notna().any() else None
-                    total_days_in_month = int((month_end - month_start).days + 1)
-                    proj_eom = (opening + avg_daily * total_days_in_month) if pd.notna(avg_daily) else np.nan
-                    cummax = fm_m["total_liquidity"].cummax()
-                    drawdowns = fm_m["total_liquidity"] - cummax
-                    max_dd = drawdowns.min() if not drawdowns.empty else np.nan
 
                     try:
                         import plotly.io as pio, plotly.graph_objects as go
@@ -1015,7 +1004,7 @@ def main():
                     with kpi_b: st.metric("Current", fmt_number_only(latest),
                                           delta=f"{mtd_change:,.0f} ({mtd_change_pct:.1f}%)" if pd.notna(mtd_change_pct) else None)
                     with kpi_c: st.metric("Avg Daily Δ", fmt_number_only(avg_daily))
-                    with kpi_d: st.metric("Proj. EOM", fmt_number_only(proj_eom))
+                    with kpi_d: st.metric("Proj. EOM", fmt_number_only(latest + (avg_daily or 0)))
                 else:
                     st.info("No rows in Fund Movement for the current month.")
         with c2:
@@ -1068,7 +1057,6 @@ def main():
                 else:
                     balance_due = 0.0
                 completion_rate = (paid_amount / total_due * 100) if total_due > 0 else 0
-                lc_m_chart = lc_m.copy() if not lc_m.empty else pd.DataFrame()
 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -1123,55 +1111,6 @@ def main():
                         """,
                         unsafe_allow_html=True
                     )
-
-                st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
-                st.markdown(
-                    f"""
-                    <div class="dash-card" style="background:linear-gradient(135deg, {THEME['heading_bg']} 0%, #ffffff 100%);
-                         padding:24px;border-radius:16px;border:2px solid {THEME['accent1']};margin-bottom:24px;
-                         box-shadow:0 8px 24px rgba(0,0,0,.08);">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-                            <div style="font-size:18px;font-weight:800;color:#1f2937;">📈 Settlement Progress</div>
-                            <div style="font-size:24px;font-weight:900;color:{THEME['accent1']};">{completion_rate:.1f}%</div>
-                        </div>
-                        <div style="width:100%;height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:16px;">
-                            <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);
-                                 border-radius:6px;width:{completion_rate}%;transition:width 0.3s ease;"></div>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;font-size:14px;flex-wrap:wrap;gap:8px;">
-                            <span style="color:#7c3aed;font-weight:600;">💰 Total: {fmt_number_only(total_due)}</span>
-                            <span style="color:#dc2626;font-weight:600;">⚠️ Current: {fmt_number_only(current_due)}</span>
-                            <span style="color:#16a34a;font-weight:600;">✅ Paid: {fmt_number_only(paid_amount)}</span>
-                            <span style="color:#d97706;font-weight:600;">📋 Balance: {fmt_number_only(balance_due)}</span>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-                if not lc_m_chart.empty:
-                    lc_m_chart["week"] = lc_m_chart["settlement_date"].dt.isocalendar().week.astype(int)
-                    weekly = lc_m_chart.groupby("week", as_index=False)["amount"].sum().sort_values("week")
-                    st.markdown("### 📊 Weekly Settlement Schedule")
-                    try:
-                        import plotly.io as pio, plotly.graph_objects as go
-                        if "brand" not in pio.templates:
-                            pio.templates["brand"] = pio.templates["plotly_white"]
-                            pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
-                            pio.templates["brand"].layout.font.family = APP_FONT
-                        fig = go.Figure()
-                        fig.add_trace(go.Bar(
-                            x=[f"Week {w}" for w in weekly["week"]],
-                            y=weekly["amount"],
-                            marker=dict(color=THEME["accent1"]),
-                            text=[f"SAR {v:,.0f}" for v in weekly["amount"]],
-                            textposition="outside"
-                        ))
-                        fig.update_layout(template="brand", height=350, margin=dict(l=20,r=20,t=20,b=40),
-                                          xaxis_title="", yaxis_title="Amount (SAR)", showlegend=False)
-                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
-                    except Exception:
-                        st.bar_chart(weekly.set_index("week")["amount"])
             except Exception as e:
                 st.error(f"Unable to render Settlements section: {e}")
 
@@ -1530,13 +1469,13 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Export LC tab (updated: advising bank filter, accepted MTD maturity sum KPI) ----
+    # ---- Export LC tab ----
     with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
         else:
-            # Create filters (Branch, Advising Bank, Date)
+            # Filters: Branch, Advising Bank, Maturity Date (top-level)
             col1, col2 = st.columns(2)
             with col1:
                 branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
@@ -1548,25 +1487,37 @@ def main():
                 else:
                     selected_advising_banks = []
 
-            # Dates (safe defaults)
-            sub_dates = df_export_lc["submitted_date"].dropna() if "submitted_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
-            min_date_default = (sub_dates.min().date() if not sub_dates.empty else (datetime.today().date().replace(day=1)))
-            max_date_default = (sub_dates.max().date() if not sub_dates.empty else datetime.today().date())
+            # Maturity Date filters (replacing Submitted Date, keep rows with no maturity_date)
+            mat_dates = df_export_lc["maturity_date"].dropna() if "maturity_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
+            min_mat_default = (mat_dates.min().date() if not mat_dates.empty else (datetime.today().date().replace(day=1)))
+            max_mat_default = (mat_dates.max().date() if not mat_dates.empty else datetime.today().date())
             d1, d2 = st.columns(2)
             with d1:
-                start_date_filter = st.date_input("From Submitted Date", value=min_date_default, key="export_lc_start_date")
+                start_maturity_filter = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
             with d2:
-                end_date_filter = st.date_input("To Submitted Date", value=max_date_default, key="export_lc_end_date")
+                end_maturity_filter = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
 
             # Apply branch + advising bank filters first
             filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
             if selected_advising_banks and "advising_bank" in filtered_df_base.columns:
                 filtered_df_base = filtered_df_base[filtered_df_base["advising_bank"].isin(selected_advising_banks)]
 
-            # Apply date filter (keep rows with no submitted_date)
-            if "submitted_date" in filtered_df_base.columns:
-                date_mask = filtered_df_base["submitted_date"].dt.date.between(start_date_filter, end_date_filter, inclusive="both")
-                no_date_mask = filtered_df_base["submitted_date"].isna()
+            # Apply Maturity Date filter robustly (normalize to day, keep NaT)
+            if "maturity_date" in filtered_df_base.columns:
+                maturity_ts = pd.to_datetime(filtered_df_base["maturity_date"], errors='coerce')
+                # Drop timezone if any
+                try:
+                    maturity_ts = maturity_ts.dt.tz_localize(None)
+                except Exception:
+                    try:
+                        maturity_ts = maturity_ts.dt.tz_convert(None)
+                    except Exception:
+                        pass
+                maturity_norm = maturity_ts.dt.normalize()
+                start_ts = pd.to_datetime(start_maturity_filter)
+                end_ts = pd.to_datetime(end_maturity_filter)
+                date_mask = maturity_norm.between(start_ts, end_ts)
+                no_date_mask = maturity_norm.isna()
                 filtered_df_base = filtered_df_base[date_mask | no_date_mask].copy()
 
             # Status as tabs
@@ -1594,9 +1545,17 @@ def main():
                         now = pd.Timestamp.now()
                         start_month = now.replace(day=1)
                         end_month = (start_month + pd.offsets.MonthEnd(1))
+                        # Normalize series to day for robust comparison
+                        maturity_series = pd.to_datetime(filtered_df['maturity_date'], errors='coerce')
+                        try:
+                            maturity_series = maturity_series.dt.tz_localize(None)
+                        except Exception:
+                            try:
+                                maturity_series = maturity_series.dt.tz_convert(None)
+                            except Exception:
+                                pass
                         mask = (filtered_df['status'] == 'ACCEPTED') & \
-                               (filtered_df['maturity_date'].notna()) & \
-                               (filtered_df['maturity_date'].between(start_month, end_month))
+                               (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
                         accepted_mtd_value = filtered_df.loc[mask, 'value_sar'].sum()
 
                     m1, m2 = st.columns(2)
@@ -1626,8 +1585,53 @@ def main():
                     else:
                         st.info("No records to summarize for the selected filters.")
 
-                    # Detailed table (includes L/C No and Advising Bank)
+                    # ---- Detailed View (table-only maturity date filters + clean 'None' + DD-MM-YYYY for Maturity) ----
                     st.markdown("#### Detailed View")
+
+                    # Safe fallback without boolean-evaluating DataFrames
+                    _tmp = locals().get("filtered_df", None)
+                    table_base = _tmp.copy() if _tmp is not None else filtered_df_base.copy()
+
+                    if 'maturity_date' in table_base.columns:
+                        mdates = pd.to_datetime(table_base['maturity_date'], errors='coerce')
+                        try:
+                            mdates = mdates.dt.tz_localize(None)
+                        except Exception:
+                            try:
+                                mdates = mdates.dt.tz_convert(None)
+                            except Exception:
+                                pass
+                        default_m_start = (mdates.dropna().min().normalize().date() if mdates.notna().any() else datetime.today().date().replace(day=1))
+                        default_m_end = (mdates.dropna().max().normalize().date() if mdates.notna().any() else datetime.today().date())
+                        dmt1, dmt2 = st.columns(2)
+                        with dmt1:
+                            mat_start = st.date_input(
+                                "From Maturity Date (Table View)",
+                                value=default_m_start,
+                                key=f"export_lc_table_mstart_{status_key}"
+                            )
+                        with dmt2:
+                            mat_end = st.date_input(
+                                "To Maturity Date (Table View)",
+                                value=default_m_end,
+                                key=f"export_lc_table_mend_{status_key}"
+                            )
+                        # Filter by normalized day; keep rows with no maturity_date
+                        maturity_ts = pd.to_datetime(table_base["maturity_date"], errors='coerce')
+                        try:
+                            maturity_ts = maturity_ts.dt.tz_localize(None)
+                        except Exception:
+                            try:
+                                maturity_ts = maturity_ts.dt.tz_convert(None)
+                            except Exception:
+                                pass
+                        maturity_norm = maturity_ts.dt.normalize()
+                        start_ts = pd.to_datetime(mat_start)
+                        end_ts = pd.to_datetime(mat_end)
+                        in_range = maturity_norm.between(start_ts, end_ts)
+                        table_base = table_base[maturity_norm.isna() | in_range].copy()
+
+                    # Detailed table (includes L/C No and Advising Bank)
                     display_cols = {
                         'branch': 'Branch',
                         'applicant': 'Applicant',
@@ -1639,13 +1643,27 @@ def main():
                         'status': 'Status',
                         'remarks': 'Remarks'
                     }
-                    cols_to_show = [k for k in display_cols.keys() if k in filtered_df.columns]
+                    cols_to_show = [k for k in display_cols.keys() if k in table_base.columns]
                     if cols_to_show:
-                        table_view = filtered_df[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
+                        table_view = table_base[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
+
+                        # Submitted Date stays YYYY-MM-DD
                         if 'Submitted Date' in table_view.columns:
-                            table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
+                            table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+
+                        # Maturity Date → DD-MM-YYYY (only in this detailed table view)
                         if 'Maturity Date' in table_view.columns:
-                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
+                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce').dt.strftime('%d-%m-%Y')
+
+                        # Remove 'None'/'NaT'/'nan' text in object columns only
+                        obj_cols = table_view.select_dtypes(include='object').columns
+                        if len(obj_cols) > 0:
+                            table_view[obj_cols] = (
+                                table_view[obj_cols]
+                                .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''})
+                                .fillna('')
+                            )
+
                         st.dataframe(
                             style_right(table_view, num_cols=['Value (SAR)']), 
                             use_container_width=True, 
