@@ -19,7 +19,8 @@
 # - UPDATE: Removed auto refresh.
 # - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
 # - UPDATE: Export LC Detailed View table now displays 'Maturity Date' (formatted DD-MM-YYYY) and excludes 'Submitted Date'.
-# - FIX: Ensured 'Maturity Date' column is explicitly included and correctly formatted in Export LC Detailed View.
+# - FIX: Ensured 'Maturity Date' column is explicitly included and correctly formatted in Export LC Detailed View,
+#        and added robust parsing for 'MATURITY DATE (DT FORMAT)' column name from the Excel sheet.
 
 import io
 import time
@@ -705,6 +706,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'value (sar)': 'value_sar',
             'payment term (days)': 'payment_term_days',
             # Robustly map 'maturity date' and its variations
+            'maturity date (dt format)': 'maturity_date', # Specific to your new sheet column name
             'maturity date': 'maturity_date',
             'date of maturity': 'maturity_date',
             'due date': 'maturity_date',
@@ -716,8 +718,17 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
         }
         if lc_no_col:
             rename_map[lc_no_col] = 'lc_no'
-
-        d = d.rename(columns=rename_map)
+            
+        # Apply rename map to DataFrame columns
+        # First, ensure all keys in rename_map that are present in df.columns are lowercased
+        # Then, create a new mapping based on the actual lowercased columns in d
+        current_cols = [col for col in d.columns]
+        actual_rename_map = {}
+        for old_col, new_col in rename_map.items():
+            if old_col in current_cols:
+                actual_rename_map[old_col] = new_col
+        
+        d = d.rename(columns=actual_rename_map)
 
         # Coerce datatypes
         if 'submitted_date' in d.columns:
@@ -1627,19 +1638,21 @@ def main():
                             except Exception:
                                 pass
                         
-                        default_m_start = (mdates.dropna().min().normalize().date() if mdates.notna().any() else datetime.today().date().replace(day=1))
-                        default_m_end = (mdates.dropna().max().normalize().date() if mdates.notna().any() else datetime.today().date())
+                        # Set default filter dates robustly
+                        min_date = mdates.dropna().min().normalize().date() if mdates.notna().any() else datetime.today().date().replace(day=1)
+                        max_date = mdates.dropna().max().normalize().date() if mdates.notna().any() else datetime.today().date()
+
                         dmt1, dmt2 = st.columns(2)
                         with dmt1:
                             mat_start = st.date_input(
                                 "From Maturity Date (Table View)",
-                                value=default_m_start,
+                                value=min_date, # Use the robust default
                                 key=f"export_lc_table_mstart_{status_key}"
                             )
                         with dmt2:
                             mat_end = st.date_input(
                                 "To Maturity Date (Table View)",
-                                value=default_m_end,
+                                value=max_date, # Use the robust default
                                 key=f"export_lc_table_mend_{status_key}"
                             )
                         # Filter by normalized day; keep rows with no maturity_date
@@ -1668,7 +1681,7 @@ def main():
                     cols_to_show_internal = [col_name for col_name, _ in desired_columns_info if col_name in table_base.columns]
                     display_name_map = {col_name: display_name for col_name, display_name in desired_columns_info if col_name in table_base.columns}
 
-                    if cols_to_show_internal:
+                    if not table_base.empty and cols_to_show_internal:
                         table_view = table_base[cols_to_show_internal].copy()
                         table_view = table_view.rename(columns=display_name_map)
 
@@ -1698,7 +1711,7 @@ def main():
                             height=500
                         )
                     else:
-                        st.info("No columns available for detailed view after applying filters.")
+                        st.info("No records available for the detailed view after applying filters.")
 
     # ---- Exchange Rates tab ----
     with tab_fx:
