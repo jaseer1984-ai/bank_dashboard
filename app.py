@@ -1511,7 +1511,7 @@ def main():
                     "Filter by Branch",
                     options=branch_options,
                     index=0,
-                    key="export_lc_branch_radio",
+                     key="export_lc_branch_radio_top_v2",  # ← changed
                     horizontal=True
                 )
                 selected_branches = branches if branch_choice == "All" else [branch_choice]
@@ -1527,7 +1527,7 @@ def main():
                         "Filter by Advising Bank",
                         options=adv_options,
                         index=0,
-                        key="export_lc_advising_radio",
+                        key="export_lc_advising_radio_top_v2",  # ← changed
                         horizontal=True
                     )
                     selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
@@ -2053,6 +2053,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
