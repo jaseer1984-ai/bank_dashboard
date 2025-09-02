@@ -1502,38 +1502,36 @@ def main():
         else:
             # Filters: Branch, Advising Bank, Maturity Date (top-level)
             col1, col2 = st.columns(2)
-     
+             
     with col1:
-        branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
-        branch_options = ["All"] + branches
-        branch_choice = st.radio(
-        "Filter by Branch",
-        options=branch_options,
-        index=0,
-        horizontal=True,
-        key="export_lc_branch_radio",
-    )
-    selected_branches = branches if branch_choice == "All" else [branch_choice]
-
-with col2:
-    if "advising_bank" in df_export_lc.columns:
-        advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
-    else:
-        advising_banks = []
-
-    if advising_banks:
-        adv_options = ["All"] + advising_banks
-        adv_choice = st.radio(
-            "Filter by Advising Bank",
-            options=adv_options,
-            index=0,
-            horizontal=True,
-            key="export_lc_advising_radio",
-        )
-        selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
-    else:
-        selected_advising_banks = []
-
+            branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
+            branch_options = ["All"] + branches
+            branch_choice = st.radio(
+                "Filter by Branch",
+                options=branch_options,
+                index=0,
+                horizontal=True,
+                key="export_lc_branch_radio",
+            )
+            selected_branches = branches if branch_choice == "All" else [branch_choice]
+        
+   with col2:
+            advising_banks = (
+                sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
+                if "advising_bank" in df_export_lc.columns else []
+            )
+            if advising_banks:
+                adv_options = ["All"] + advising_banks
+                adv_choice = st.radio(
+                    "Filter by Advising Bank",
+                    options=adv_options,
+                    index=0,
+                    horizontal=True,
+                    key="export_lc_advising_radio",
+                )
+                selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
+            else:
+                selected_advising_banks = []
 
             # Apply branch + advising bank filters first
             filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
@@ -1970,6 +1968,7 @@ with col2:
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
