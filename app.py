@@ -18,7 +18,7 @@
 # - CHANGE: Export LC Detailed View removes 'None'/NaT, adds table-only Maturity Date filters, and formats Maturity Date as DD-MM-YYYY.
 # - UPDATE: Removed auto refresh.
 # - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
-# - UPDATE: Export LC Detailed View table now displays 'Maturity Date' instead of 'Submitted Date'.
+# - UPDATE: Export LC Detailed View table now displays 'Maturity Date' (formatted DD-MM-YYYY) and excludes 'Submitted Date'.
 
 import io
 import time
@@ -703,7 +703,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'submitted date': 'submitted_date',
             'value (sar)': 'value_sar',
             'payment term (days)': 'payment_term_days',
-            'maturity date': 'maturity_date',
+            'maturity date': 'maturity_date', # Column from source Excel
             'status': 'status',
             'remarks': 'remarks',
             'branch': 'branch',
@@ -1649,14 +1649,14 @@ def main():
                         in_range = maturity_norm.between(start_ts, end_ts)
                         table_base = table_base[maturity_norm.isna() | in_range].copy()
 
-                    # Detailed table columns (UPDATED: removed Submitted Date, added Maturity Date)
+                    # Detailed table columns: 'Maturity Date' is included, 'Submitted Date' is NOT.
                     display_cols = {
                         'branch': 'Branch',
                         'applicant': 'Applicant',
                         'lc_no': 'L/C No',
                         'advising_bank': 'Advising Bank',
-                        # 'submitted_date': 'Submitted Date', # Removed as per request
-                        'maturity_date': 'Maturity Date', # Explicitly included
+                        # 'submitted_date': 'Submitted Date', # Excluded from this table view
+                        'maturity_date': 'Maturity Date',    # Explicitly included here
                         'value_sar': 'Value (SAR)',
                         'maturing_current_month': 'Maturing Current Month', 
                         'status': 'Status',
@@ -1666,18 +1666,23 @@ def main():
                     if cols_to_show:
                         table_view = table_base[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
 
-                        # Maturity Date → DD-MM-YYYY (only in this detailed table view)
+                        # Format Maturity Date as DD-MM-YYYY (and handle NaT to empty string)
                         if 'Maturity Date' in table_view.columns:
                             table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce').dt.strftime('%d-%m-%Y')
-                        
-                        # Remove 'None'/'NaT'/'nan' text in object columns only
+                            table_view['Maturity Date'] = table_view['Maturity Date'].replace({pd.NaT: ''}) # Ensure NaT displays as empty
+
+
+                        # Remove 'None'/'NaT'/'nan' text in other object columns
                         obj_cols = table_view.select_dtypes(include='object').columns
                         if len(obj_cols) > 0:
-                            table_view[obj_cols] = (
-                                table_view[obj_cols]
-                                .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''})
-                                .fillna('')
-                            )
+                            # Apply replacement for all relevant object columns except formatted 'Maturity Date'
+                            cols_to_clean = [col for col in obj_cols if col != 'Maturity Date']
+                            for col in cols_to_clean:
+                                table_view[col] = (
+                                    table_view[col]
+                                    .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''})
+                                    .fillna('')
+                                )
                         
                         num_cols = [c for c in ['Value (SAR)', 'Maturing Current Month'] if c in table_view.columns]
 
