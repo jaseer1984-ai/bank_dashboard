@@ -1496,7 +1496,7 @@ def main():
 
     # ---- Export LC tab ----
    # ---- Export LC tab ----
-with tab_export_lc:
+        with tab_export_lc:
     st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
     if df_export_lc.empty:
         st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
@@ -1979,5 +1979,6 @@ with tab_export_lc:
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
