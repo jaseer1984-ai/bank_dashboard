@@ -1,3 +1,6 @@
+Looking at your code, Streamlit should already have a built-in sidebar toggle button (hamburger menu) in the top-left corner. Since you mentioned it's not visible, I'll add CSS to ensure the default Streamlit sidebar toggle is visible and prominent:
+
+```python
 # -*- coding: utf-8 -*-
 # app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab, Export LC Tab)
 # - "Remaining in Month" shows Balance Due from Settlements sheet
@@ -98,6 +101,27 @@ def set_app_font(family: str = APP_FONT):
       .stDataFrame, .stDataFrame * {{ font-variant-numeric: tabular-nums; }}
       /* Do NOT hide the toolbar—this holds the sidebar toggle */
       /* [data-testid="stToolbar"] {{ display: none !important; }} */
+      
+      /* Ensure sidebar toggle button is visible and prominent */
+      [data-testid="stToolbar"] {{
+        visibility: visible !important;
+        opacity: 1 !important;
+      }}
+      
+      /* Make the sidebar toggle button more visible */
+      [data-testid="stToolbar"] > button[kind="header"] {{
+        visibility: visible !important;
+        opacity: 1 !important;
+        background-color: rgba(255, 255, 255, 0.8) !important;
+        border: 1px solid #e0e0e0 !important;
+        border-radius: 4px !important;
+      }}
+      
+      /* Ensure the hamburger icon is visible */
+      [data-testid="stToolbar"] svg {{
+        visibility: visible !important;
+        opacity: 1 !important;
+      }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
