@@ -24,9 +24,6 @@
 # - NEW: "Accepted Due this Month (SAR)" metric only shown in 'Accepted' tab of Export LC.
 # - NEW: All metric values in Settlements, Supplier Payments, and Export LC tabs are displayed as custom KPI cards.
 # - FIX: Resolved "module' object does not support the context manager protocol" Plotly error by calling .plotly_chart() on the column object.
-# - FIX: Corrected passing of Streamlit column object to render_main_kpi_card in "Liquidity Trend Analysis".
-# - FIX: Improved robustness of render_main_kpi_card to avoid displaying "N/A" for main value when only delta is present,
-#        and fixed stray '</div>' tags in delta HTML rendering.
 
 
 import io
@@ -222,7 +219,7 @@ LINKS = {
 # ----------------------------
 # Rate-limit decorator
 # ----------------------------
-def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CPM): # Corrected from config.RATE_LIMIT_CALLS_PER_MINUTE
+def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE):
     def decorator(func):
         last_called: Dict[str, float] = {}
         @wraps(func)
@@ -302,7 +299,7 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
 # ----------------------------
 # Custom KPI Card Renderer
 # ----------------------------
-def render_main_kpi_card(col_container, title, value, prefix="SAR ", decimals=0, delta=None):
+def render_main_kpi_card(col, title, value, prefix="SAR ", decimals=0, delta=None):
     # Ensure value is numeric for formatting, even if it might be string for delta
     display_value = value if isinstance(value, (int, float)) else np.nan
     value_str = fmt_number(display_value, decimals=decimals)
@@ -314,28 +311,20 @@ def render_main_kpi_card(col_container, title, value, prefix="SAR ", decimals=0,
             delta_color = "#059669" if delta_value >= 0 else "#dc2626"
             delta_symbol = "▲" if delta_value >= 0 else "▼"
             delta_text = f"{delta_symbol} {delta_value:,.0f}"
-        elif isinstance(delta_value, str) and delta_value.strip() != "" and delta_value != "N/A":
-            # Assume delta_value is already a formatted string with symbol/color
-            # Check for existing numeric prefix to apply color, otherwise default to neutral
-            if re.match(r'^[+-]?\d', delta_value.strip()):
-                delta_color = "#059669" if delta_value.startswith('+') else ("#dc2626" if delta_value.startswith('-') else "#0f172a")
-            else:
-                delta_color = "#0f172a" # Neutral color if not a numeric trend
-            delta_text = delta_value
-        else:
-            delta_text = "" # If delta is None, NaN, or an empty/non-meaningful string, render nothing.
-            
-        if delta_text: # Only render the delta div if there's actual text for it
-            delta_html = f"""
-            <div style="font-size:12px; font-weight:600; color:{delta_color}; margin-top:4px;">
-                {delta_text}
-            </div>
-            """
+        else: # Assume string format already includes symbol/color if desired
+            delta_color = "#0f172a" # Neutral color if no specific sentiment
+            delta_text = str(delta_value) # Use raw string if preformatted
+
+        delta_html = f"""
+        <div style="font-size:12px; font-weight:600; color:{delta_color}; margin-top:4px;">
+            {delta_text}
+        </div>
+        """
     
     card_bg = THEME["heading_bg"]
     border_color = THEME["accent1"] 
     
-    with col_container: # This 'with' block expects 'col_container' to be a Streamlit column object
+    with col:
         st.markdown(
             f"""
             <div class="dash-card" style="background:{card_bg}; padding:18px; border-radius:12px; 
@@ -702,7 +691,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'payment term (days)': 'payment_term_days',
             # Robustly map 'maturity date' and its variations, prioritize exact match from screenshot
             'maturity date (dt format)': 'maturity_date', # This is the exact name from your screenshot
-            'maturity date': 'maturity_date', # General form
+            'maturity date': 'maturity_date',
             'date of maturity': 'maturity_date',
             'due date': 'maturity_date',
             'lc maturity date': 'maturity_date',
@@ -1081,7 +1070,7 @@ def main():
         # 3) FX MTD section restored
         if st.session_state.get("show_fx", True) and not df_fx.empty:
             st.subheader("Exchange Rates — Month Overview")
-            fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy() # Fixed typo: df_fm to df_fx
+            fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy()
             if not fx_m.empty:
                 f1, f2 = st.columns(2)
                 with f1:
@@ -1236,31 +1225,49 @@ def main():
         if df_fm.empty:
             st.info("No liquidity data available.")
         else:
-            # Replaced problematic Plotly chart with direct st.line_chart
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.line_chart(df_fm.set_index("date")["total_liquidity"], use_container_width=True) 
-            with c2:
-                st.markdown("### 📊 Liquidity Metrics")
-                latest_liquidity = df_fm.iloc[-1]["total_liquidity"] if not df_fm.empty else np.nan
-                render_main_kpi_card(c2, "Current", latest_liquidity, prefix="SAR ", decimals=0) # FIX: Pass c2
-                
-                # Calculate trend_text for KPI card
-                trend_text = "N/A"
+            try:
+                import plotly.io as pio, plotly.graph_objects as go
+                if "brand" not in pio.templates:
+                    pio.templates["brand"] = pio.templates["plotly_white"]
+                    pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                    pio.templates["brand"].layout.font.family = APP_FONT
+                    pio.templates["brand"].layout.paper_bgcolor = "white"
+                    pio.templates["brand"].layout.plot_bgcolor = "white"
+                latest_liquidity = df_fm.iloc[-1]["total_liquidity"]
                 if len(df_fm) > 1:
                     prev = df_fm.iloc[-2]["total_liquidity"]
                     trend_change = latest_liquidity - prev
                     trend_pct = (trend_change / prev) * 100 if prev != 0 else 0
-                    trend_text = f"{'+' if trend_pct >= 0 else ''}{trend_pct:.1f}%" # Format for delta
-                
-                # Render Trend card, only showing delta if meaningful
-                render_main_kpi_card(c2, "Trend", None, prefix="", decimals=0, delta=trend_text if trend_text != "N/A" else None) # FIX: Pass c2, value=None
-                st.markdown("**Statistics (30d)**")
-                last30 = df_fm.tail(30)
-                st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
-                st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
-                st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
-
+                    trend_text = f"{'📈' if trend_change > 0 else '📉'} {trend_pct:+.1f}%"
+                else:
+                    trend_text = "No trend data"
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=df_fm["date"],
+                                                 y=df_fm["total_liquidity"],
+                                                 mode='lines+markers',
+                                                 line=dict(width=3), 
+                                                 marker=dict(size=6)))
+                    fig.update_layout(template="brand", title="Total Liquidity Trend",
+                                      xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
+                                      margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+                    fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
+                    c1.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG) # FIX: Call .plotly_chart on the column object 'c1'
+                with c2:
+                    st.markdown("### 📊 Liquidity Metrics")
+                    render_main_kpi_card(st, "Current", latest_liquidity, prefix="SAR ", decimals=0)
+                    if len(df_fm) > 1:
+                         render_main_kpi_card(st, "Trend", None, prefix="", decimals=0, delta=trend_text) # Delta already formatted
+                    st.markdown("**Statistics (30d)**")
+                    last30 = df_fm.tail(30)
+                    st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
+                    st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
+                    st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
+            except Exception as e: # Catch and log the specific exception
+                logger.error(f"Plotly chart in tab_bank failed: {e}")
+                st.error(f"❌ Plotly chart in 'Liquidity Trend Analysis' failed to render. Showing basic chart. Error: {e}") # Show the actual error message
+                st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
         st.markdown("---")
         st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
@@ -1549,9 +1556,9 @@ def main():
             max_mat_default = (mat_dates.max().date() if not mat_dates.empty else datetime.today().date())
             d1, d2 = st.columns(2)
             with d1:
-                mat_start = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
+                start_maturity_filter = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
             with d2:
-                mat_end = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
+                end_maturity_filter = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
 
             # Apply branch + advising bank filters first
             filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
@@ -1570,8 +1577,8 @@ def main():
                     except Exception:
                         pass
                 maturity_norm = maturity_ts.dt.normalize()
-                start_ts = pd.to_datetime(mat_start)
-                end_ts = pd.to_datetime(mat_end)
+                start_ts = pd.to_datetime(start_maturity_filter)
+                end_ts = pd.to_datetime(end_maturity_filter)
                 date_mask = maturity_norm.between(start_ts, end_ts)
                 no_date_mask = maturity_norm.isna()
                 filtered_df_base = filtered_df_base[date_mask | no_date_mask].copy()
@@ -1751,19 +1758,13 @@ def main():
                 if not latest_fx.empty:
                     cols = st.columns(min(4, len(latest_fx)))
                     for i, row in latest_fx.iterrows():
-                        # Calculate change_info for delta
-                        change_info = None
-                        if "change_pct" in row and pd.notna(row["change_pct"]):
-                            change_pct = row["change_pct"]
-                            change_info = f"{'+' if change_pct >= 0 else ''}{change_pct:+.2f}%"
-                        
                         render_main_kpi_card(
                             cols[int(i) % min(4, len(latest_fx))], # Pass the column object
                             row["currency_pair"],
                             row["rate"],
                             prefix="", # FX rates usually don't have a currency prefix on the number itself
                             decimals=4,
-                            delta=change_info # Pass the pre-formatted string or None
+                            delta=(f"{'📈' if row['change_pct'] >= 0 else '📉'} {row['change_pct']:+.2f}%") if pd.notna(row["change_pct"]) else None
                         )
                             
                 st.markdown("---")
@@ -1771,7 +1772,7 @@ def main():
                 render_main_kpi_card(col1, "Currency Pairs", len(latest_fx), prefix="", decimals=0)
                 if "change_pct" in latest_fx.columns:
                     avg_change = latest_fx["change_pct"].mean()
-                    render_main_kpi_card(col2, "Avg Change %", avg_change, prefix="", decimals=2)
+                    render_main_kpi_card(col2, "Avg Change %", avg_change, prefix="", decimals=2) # Delta param is a %
                 last_update = latest_fx["date"].max() if "date" in latest_fx.columns else None
                 if pd.notna(last_update):
                     render_main_kpi_card(col3, "Last Update", last_update.strftime(config.DATE_FMT), prefix="", decimals=0)
