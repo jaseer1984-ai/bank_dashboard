@@ -1526,7 +1526,7 @@ def main():
                         horizontal=True,
                         key="export_lc_advising_radio",
                  )
-                   selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
+                    selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
                 else:
                     selected_advising_banks = []
 
@@ -1975,5 +1975,6 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
