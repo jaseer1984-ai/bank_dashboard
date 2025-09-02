@@ -12,25 +12,11 @@
 # - "Export LC" tab moved after "Supplier Payments" and a "Status" filter added.
 # - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
 # - Fixed bug where tab focus jumped on filter change by adding stable keys.
-# - UPDATE: Export LC tab now shows L/C No in table, uses Advising Bank instead of Issuing Bank in table,
-#           Status moved to tabs, and added Issuing Bank filter. Parsing of L/C No made robust.
-# - CHANGE: Export LC tab top-level date filters now use Maturity Date (not Submitted Date).
-# - CHANGE: Export LC Detailed View removes 'None'/NaT, adds table-only Maturity Date filters, and formats Maturity Date as DD-MM-YYYY.
-# - UPDATE: Removed auto refresh.
-# - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
-# - UPDATE: Export LC Detailed View table now displays 'Maturity Date' (formatted DD-MM-YYYY) and excludes 'Submitted Date'.
-# - FIX: Ensured 'Maturity Date' column is explicitly included and correctly formatted in Export LC Detailed View,
-#        and added robust parsing for 'MATURITY DATE (DT FORMAT)' column name from the Excel sheet.
-# - NEW: "Accepted Due this Month (SAR)" metric only shown in 'Accepted' tab of Export LC.
-# - NEW: All metric values in Settlements, Supplier Payments, and Export LC tabs are displayed as custom KPI cards.
-# - FIX: Resolved "module' object does not support the context manager protocol" Plotly error by calling .plotly_chart() on the column object.
-
 
 import io
 import time
 import logging
 import os
-import re
 from datetime import datetime
 from dataclasses import dataclass
 from functools import wraps
@@ -187,7 +173,7 @@ st.markdown(f"""
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e2e8f0; }}
   /* Reports (now 8th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(8) {{ background:#f3e8ff; color:#0f172a; }}
-  [data-testid="stTabs"] button[aria-selected="true"]:nth-child(8) {{ background:#e9d5ff; }}
+  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(8) {{ background:#e9d5ff; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -213,7 +199,7 @@ LINKS = {
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
     "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
-    "EXPORT_LC": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRm_ZP8i-fDDLUC4i9SsnmamkvDRGAEtGMvD5fE3D5MNjetpIx0-bt5hqGL2neIEw/pub?output=xlsx",
+    "EXPORT_LC": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRlG-a8RqvHK0_BJJtqRe8W7iv5Ey-dKKsaKWdyyT4OsvZnjPrTeRA0jQVFYQWEAA/pub?output=xlsx",
 }
 
 # ----------------------------
@@ -297,51 +283,6 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
     return styler
 
 # ----------------------------
-# Custom KPI Card Renderer
-# ----------------------------
-def render_main_kpi_card(col, title, value, prefix="SAR ", decimals=0, delta=None):
-    # Ensure value is numeric for formatting, even if it might be string for delta
-    display_value = value if isinstance(value, (int, float)) else np.nan
-    value_str = fmt_number(display_value, decimals=decimals)
-    
-    delta_html = ""
-    if delta is not None:
-        delta_value = delta
-        if isinstance(delta_value, (int, float)):
-            delta_color = "#059669" if delta_value >= 0 else "#dc2626"
-            delta_symbol = "▲" if delta_value >= 0 else "▼"
-            delta_text = f"{delta_symbol} {delta_value:,.0f}"
-        else: # Assume string format already includes symbol/color if desired
-            delta_color = "#0f172a" # Neutral color if no specific sentiment
-            delta_text = str(delta_value) # Use raw string if preformatted
-
-        delta_html = f"""
-        <div style="font-size:12px; font-weight:600; color:{delta_color}; margin-top:4px;">
-            {delta_text}
-        </div>
-        """
-    
-    card_bg = THEME["heading_bg"]
-    border_color = THEME["accent1"] 
-    
-    with col:
-        st.markdown(
-            f"""
-            <div class="dash-card" style="background:{card_bg}; padding:18px; border-radius:12px; 
-                 border-left:4px solid {border_color}; margin-bottom:16px; box-shadow:0 2px 8px rgba(0,0,0,.05);">
-                <div style="font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;">
-                    {title}
-                </div>
-                <div style="font-size:24px; font-weight:800; color:#0f172a; text-align:right;">
-                    {prefix}{value_str if pd.notna(display_value) else 'N/A'}
-                </div>
-                {delta_html}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-# ----------------------------
 # Cached Data Fetching
 # ----------------------------
 @st.cache_data(ttl=config.CACHE_TTL)
@@ -377,6 +318,73 @@ def read_excel_all_sheets(url: str) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Failed to read Excel from {url}: {e}")
         return pd.DataFrame()
+
+# ----------------------------
+# Display helpers
+# ----------------------------
+def display_as_list(df, bank_col="bank", amount_col="balance", title="Bank Balances"):
+    st.markdown(f"<span class='section-chip'>{title}</span>", unsafe_allow_html=True)
+    for _, row in df.iterrows():
+        color = THEME['amount_color']['neg'] if pd.notna(row[amount_col]) and row[amount_col] < 0 else THEME['amount_color']['pos']
+        st.markdown(
+            f"""
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #e2e8f0;">
+                <span style="font-weight:700; color:#1e293b;">{row[bank_col]}</span>
+                <span style="font-weight:800; color:{color};">{fmt_currency(row[amount_col])}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+def display_as_mini_cards(df, bank_col="bank", amount_col="balance", pad="20px", radius="12px", shadow="0 2px 8px rgba(0,0,0,0.1)"):
+    cols = st.columns(3)
+    for i, row in df.iterrows():
+        with cols[int(i) % 3]:
+            st.markdown(
+                f"""
+                <div class="dash-card" style="background:{THEME['heading_bg']};padding:{pad};border-radius:{radius};border-left:4px solid {THEME['accent1']};margin-bottom:12px;box-shadow:{shadow};">
+                    <div style="font-size:12px;color:#0f172a;font-weight:700;margin-bottom:8px;">{row[bank_col]}</div>
+                    <div style="font-size:18px;font-weight:800;color:#0f172a;text-align:right;">{fmt_currency(row[amount_col])}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+def display_as_progress_bars(df, bank_col="bank", amount_col="balance"):
+    max_amount = df[amount_col].max()
+    for _, row in df.iterrows():
+        percentage = (row[amount_col] / max_amount) * 100 if max_amount > 0 else 0
+        st.markdown(
+            f"""
+            <div style="margin-bottom:16px;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
+                    <span><strong>{row[bank_col]}</strong></span>
+                    <span><strong>{fmt_currency(row[amount_col])}</strong></span>
+                </div>
+                <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
+                    <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+def display_as_metrics(df, bank_col="bank", amount_col="balance"):
+    cols = st.columns(min(4, len(df)))
+    for i, row in df.iterrows():
+        if i < 4:
+            with cols[i]:
+                amount = row[amount_col]
+                display_amount = f"{amount/1_000_000:.1f}M" if amount >= 1_000_000 else (f"{amount/1_000:.0f}K" if amount >= 1_000 else f"{amount:.0f}")
+                st.markdown(
+                    f"""
+                    <div class="dash-card" style="text-align:center;padding:20px;background:{THEME['heading_bg']};border-radius:12px;border:2px solid {THEME['accent1']};margin-bottom:12px;">
+                        <div style="font-size:12px;color:#334155;font-weight:700;margin-bottom:8px;">{row[bank_col]}</div>
+                        <div style="font-size:20px;font-weight:900;color:#334155;">{display_amount}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
 # ----------------------------
 # Parsers
@@ -514,15 +522,18 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                    next((c for c in d.columns if "due" in c and "date" in c), None) or \
                    next((c for c in d.columns if c.strip().lower() == "date"), None)
 
+        # Direct column mapping for Amount SAR and Status
         amount_col = None
         status_col = None
         
+        # Find amount column - look for "amount sar"
         for col in d.columns:
             col_lower = str(col).strip().lower()
             if "amount" in col_lower and "sar" in col_lower:
                 amount_col = col
                 break
         
+        # If not found, try other patterns
         if not amount_col:
             amount_col = next((c for c in d.columns if "balance" in c and "due" in c), None) or \
                          next((c for c in d.columns if "currently" in c and "due" in c), None) or \
@@ -530,6 +541,7 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
                          next((c for c in ["amount(sar)", "amount sar", "amount", "value"] if c in d.columns), None) or \
                          next((c for c in d.columns if "amount" in c), None)
 
+        # Find status column
         for col in d.columns:
             col_lower = str(col).strip().lower()
             if "status" in col_lower:
@@ -556,6 +568,7 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         out = out.dropna(subset=["bank", "amount", "settlement_date"])
 
+        # Separate pending and closed/paid settlements
         df_pending = pd.DataFrame()
         df_paid = pd.DataFrame()
         
@@ -620,9 +633,10 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
             for col in d.columns:
                 if col != date_col and len(col) <= 4 and col.upper() == col:
                     sample_vals = d[col].dropna().head(5)
-                    numeric_count = sum(1 for val in sample_vals if pd.notna(_to_number(val)))
-                    if not sample_vals.empty and numeric_count >= len(sample_vals) * 0.8:
-                        currency_cols.append(col)
+                    if not sample_vals.empty:
+                        numeric_count = sum(1 for val in sample_vals if pd.notna(_to_number(val)))
+                        if numeric_count >= len(sample_vals) * 0.8:
+                            currency_cols.append(col)
         if not currency_cols:
             return pd.DataFrame()
         result_rows = []
@@ -653,83 +667,34 @@ def parse_exchange_rates(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse and clean the combined Export LC data (robust L/C No detection)."""
+    """Parse and clean the combined Export LC data."""
     try:
-        if df.empty: 
-            return pd.DataFrame()
+        if df.empty: return pd.DataFrame()
         d = cols_lower(df)
-
-        # Robustly detect L/C No column (handles: 'l/c no.', 'l / c no', 'lc no', 'l c no', etc.)
-        lc_no_col = None
-        possible_lc_names = [
-            "l/c no.", "l/c no", "l / c no.", "l / c no", "lc no", "l c no", "l.c. no", "l.c no"
-        ]
-        for name in possible_lc_names:
-            if name in d.columns:
-                lc_no_col = name
-                break
-        if lc_no_col is None:
-            for col in d.columns:
-                s = str(col).strip().lower()
-                if re.search(r'\b(l\s*/\s*c|l\s*c|lc)\b.*no', s):
-                    lc_no_col = col
-                    break
-
-        # Build rename map
-        # IMPORTANT: Keep original Excel column names (case-insensitive, stripped) as keys
-        # and standardized internal names as values.
-        rename_map = {
+        required_cols = ['submitted date', 'branch', 'value (sar)']
+        if not all(col in d.columns for col in required_cols):
+            logger.warning(f"Export LC sheet missing required columns. Found: {d.columns.tolist()}")
+            return pd.DataFrame()
+        d = d.rename(columns={
             'applicant': 'applicant',
+            'l/c no.': 'lc_no',
             'issuing bank': 'issuing_bank',
             'advising bank': 'advising_bank',
             'reference no.': 'reference_no',
             'benefecery branch': 'beneficiary_branch',
-            'beneficiary branch': 'beneficiary_branch',
             'invoice no.': 'invoice_no',
             'submitted date': 'submitted_date',
             'value (sar)': 'value_sar',
             'payment term (days)': 'payment_term_days',
-            # Robustly map 'maturity date' and its variations, prioritize exact match from screenshot
-            'maturity date (dt format)': 'maturity_date', # This is the exact name from your screenshot
             'maturity date': 'maturity_date',
-            'date of maturity': 'maturity_date',
-            'due date': 'maturity_date',
-            'lc maturity date': 'maturity_date',
             'status': 'status',
             'remarks': 'remarks',
-            'branch': 'branch',
-            'maturing current month': 'maturing_current_month' 
-        }
-        if lc_no_col:
-            rename_map[lc_no_col] = 'lc_no'
-            
-        # Create a mapping from actual lowercase column names to standardized names
-        actual_rename_map = {}
-        for original_excel_col, new_standard_col in rename_map.items():
-            if original_excel_col in d.columns: # Check if the lowercased version of the original col exists
-                actual_rename_map[original_excel_col] = new_standard_col
-            
-        d = d.rename(columns=actual_rename_map)
-
-        # Coerce datatypes
-        if 'submitted_date' in d.columns:
-            d['submitted_date'] = pd.to_datetime(d['submitted_date'], errors='coerce')
-        if 'maturity_date' in d.columns:
-            d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
-        if 'value_sar' in d.columns:
-            d['value_sar'] = d['value_sar'].apply(_to_number)
-        if 'maturing_current_month' in d.columns:
-            d['maturing_current_month'] = d['maturing_current_month'].apply(_to_number)
-
-
-        # Clean/standardize other string columns
-        for col_name in ['branch', 'issuing_bank', 'advising_bank', 'status']:
-            if col_name in d.columns:
-                d[col_name] = d[col_name].astype(str).str.strip().str.upper()
-
-        # Keep rows with a valid value and branch (these are core requirements for LC items)
-        required = [col for col in ['value_sar', 'branch'] if col in d.columns]
-        out = d.dropna(subset=required)
+            'branch': 'branch'
+        })
+        d['submitted_date'] = pd.to_datetime(d['submitted_date'], errors='coerce')
+        d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
+        d['value_sar'] = d['value_sar'].apply(_to_number)
+        out = d.dropna(subset=['value_sar', 'branch'])
         return out
     except Exception as e:
         logger.error(f"Error parsing Export LC data: {e}")
@@ -893,7 +858,6 @@ def main():
     # KPI: Accepted Export LC Sum
     accepted_export_lc_sum = 0.0
     if not df_export_lc.empty and 'status' in df_export_lc.columns:
-        # Sum 'value_sar' for all 'ACCEPTED' LCs
         mask = df_export_lc['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
         accepted_export_lc_sum = float(df_export_lc.loc[mask, 'value_sar'].sum())
 
@@ -917,7 +881,7 @@ def main():
         if "after_settlement" in df_by_bank.columns:
             neg_after = df_by_bank[df_by_bank["after_settlement"] < 0].copy()
             if not neg_after.empty:
-                cnt2 = len(neg_after); total_neg2 = df_by_bank.loc[df_by_bank['after_settlement'] < 0, 'after_settlement'].sum()
+                cnt2 = len(neg_after); total_neg2 = neg_after["after_settlement"].sum()
                 names2 = ", ".join(neg_after.sort_values("after_settlement")["bank"].tolist())
                 insights.append({"type": "error","title": "Banks Negative After Settlement",
                                  "content": f"{cnt2} bank(s) go negative after settlement (total {fmt_number_only(total_neg2)}). Affected: {names2}."})
@@ -978,6 +942,13 @@ def main():
                     mtd_change_pct = (mtd_change / opening * 100.0) if opening else np.nan
                     fm_m["delta"] = fm_m["total_liquidity"].diff()
                     avg_daily = fm_m["delta"].mean(skipna=True)
+                    best_row = fm_m.loc[fm_m["delta"].idxmax()] if fm_m["delta"].notna().any() else None
+                    worst_row = fm_m.loc[fm_m["delta"].idxmin()] if fm_m["delta"].notna().any() else None
+                    total_days_in_month = int((month_end - month_start).days + 1)
+                    proj_eom = (opening + avg_daily * total_days_in_month) if pd.notna(avg_daily) else np.nan
+                    cummax = fm_m["total_liquidity"].cummax()
+                    drawdowns = fm_m["total_liquidity"] - cummax
+                    max_dd = drawdowns.min() if not drawdowns.empty else np.nan
 
                     try:
                         import plotly.io as pio, plotly.graph_objects as go
@@ -1000,10 +971,11 @@ def main():
                         st.line_chart(fm_m.set_index("date")["total_liquidity"])
 
                     kpi_a, kpi_b, kpi_c, kpi_d = st.columns(4)
-                    render_main_kpi_card(kpi_a, "Opening (MTD)", opening)
-                    render_main_kpi_card(kpi_b, "Current", latest, delta=f"{mtd_change:,.0f} ({mtd_change_pct:.1f}%)" if pd.notna(mtd_change_pct) else None)
-                    render_main_kpi_card(kpi_c, "Avg Daily Δ", avg_daily)
-                    render_main_kpi_card(kpi_d, "Proj. EOM", latest + (avg_daily or 0))
+                    with kpi_a: st.metric("Opening (MTD)", fmt_number_only(opening))
+                    with kpi_b: st.metric("Current", fmt_number_only(latest),
+                                          delta=f"{mtd_change:,.0f} ({mtd_change_pct:.1f}%)" if pd.notna(mtd_change_pct) else None)
+                    with kpi_c: st.metric("Avg Daily Δ", fmt_number_only(avg_daily))
+                    with kpi_d: st.metric("Proj. EOM", fmt_number_only(proj_eom))
                 else:
                     st.info("No rows in Fund Movement for the current month.")
         with c2:
@@ -1056,12 +1028,110 @@ def main():
                 else:
                     balance_due = 0.0
                 completion_rate = (paid_amount / total_due * 100) if total_due > 0 else 0
+                lc_m_chart = lc_m.copy() if not lc_m.empty else pd.DataFrame()
 
                 col1, col2, col3, col4 = st.columns(4)
-                render_main_kpi_card(col1, "Total Due", total_due)
-                render_main_kpi_card(col2, "Current Due", current_due)
-                render_main_kpi_card(col3, "Paid", paid_amount)
-                render_main_kpi_card(col4, "Balance Due", balance_due)
+                with col1:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #f3e8ff 0%, #faf5ff 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #7c3aed;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(124,58,237,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">💰</div>
+                            <div style="font-size:14px;color:#581c87;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Total Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#581c87;margin-bottom:8px;">{fmt_number_only(total_due)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                with col2:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #fee2e2 0%, #fef2f2 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #dc2626;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(220,38,38,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">⚠️</div>
+                            <div style="font-size:14px;color:#7f1d1d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Current Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#7f1d1d;margin-bottom:8px;">{fmt_number_only(current_due)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                with col3:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #16a34a;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(22,163,74,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">✅</div>
+                            <div style="font-size:14px;color:#14532d;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Paid</div>
+                            <div style="font-size:28px;font-weight:900;color:#14532d;margin-bottom:8px;">{fmt_number_only(paid_amount)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                with col4:
+                    st.markdown(
+                        f"""
+                        <div class="dash-card" style="background:linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%);
+                             padding:24px;border-radius:16px;border-left:6px solid #d97706;margin-bottom:20px;
+                             box-shadow:0 4px 12px rgba(217,119,6,.15);position:relative;overflow:hidden;">
+                            <div style="position:absolute;top:-20px;right:-20px;font-size:60px;opacity:0.1;">📋</div>
+                            <div style="font-size:14px;color:#92400e;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Balance Due</div>
+                            <div style="font-size:28px;font-weight:900;color:#92400e;margin-bottom:8px;">{fmt_number_only(balance_due)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+                st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f"""
+                    <div class="dash-card" style="background:linear-gradient(135deg, {THEME['heading_bg']} 0%, #ffffff 100%);
+                         padding:24px;border-radius:16px;border:2px solid {THEME['accent1']};margin-bottom:24px;
+                         box-shadow:0 8px 24px rgba(0,0,0,.08);">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                            <div style="font-size:18px;font-weight:800;color:#1f2937;">📈 Settlement Progress</div>
+                            <div style="font-size:24px;font-weight:900;color:{THEME['accent1']};">{completion_rate:.1f}%</div>
+                        </div>
+                        <div style="width:100%;height:12px;background:#e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:16px;">
+                            <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);
+                                 border-radius:6px;width:{completion_rate}%;transition:width 0.3s ease;"></div>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;font-size:14px;flex-wrap:wrap;gap:8px;">
+                            <span style="color:#7c3aed;font-weight:600;">💰 Total: {fmt_number_only(total_due)}</span>
+                            <span style="color:#dc2626;font-weight:600;">⚠️ Current: {fmt_number_only(current_due)}</span>
+                            <span style="color:#16a34a;font-weight:600;">✅ Paid: {fmt_number_only(paid_amount)}</span>
+                            <span style="color:#d97706;font-weight:600;">📋 Balance: {fmt_number_only(balance_due)}</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                if not lc_m_chart.empty:
+                    lc_m_chart["week"] = lc_m_chart["settlement_date"].dt.isocalendar().week.astype(int)
+                    weekly = lc_m_chart.groupby("week", as_index=False)["amount"].sum().sort_values("week")
+                    st.markdown("### 📊 Weekly Settlement Schedule")
+                    try:
+                        import plotly.io as pio, plotly.graph_objects as go
+                        if "brand" not in pio.templates:
+                            pio.templates["brand"] = pio.templates["plotly_white"]
+                            pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
+                            pio.templates["brand"].layout.font.family = APP_FONT
+                        fig = go.Figure()
+                        fig.add_trace(go.Bar(
+                            x=[f"Week {w}" for w in weekly["week"]],
+                            y=weekly["amount"],
+                            marker=dict(color=THEME["accent1"]),
+                            text=[f"SAR {v:,.0f}" for v in weekly["amount"]],
+                            textposition="outside"
+                        ))
+                        fig.update_layout(template="brand", height=350, margin=dict(l=20,r=20,t=20,b=40),
+                                          xaxis_title="", yaxis_title="Amount (SAR)", showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    except Exception:
+                        st.bar_chart(weekly.set_index("week")["amount"])
             except Exception as e:
                 st.error(f"Unable to render Settlements section: {e}")
 
@@ -1178,40 +1248,14 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
             elif view == "List":
-                if not df_bal_view.empty:
-                    st.markdown(f"<span class='section-chip'>Bank Balances</span>", unsafe_allow_html=True)
-                    for _, row in df_bal_view.iterrows():
-                        col1, = st.columns(1) # Using columns to render KPI-like structure
-                        render_main_kpi_card(col1, row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                display_as_list(df_bal_view, "bank", "balance", "Bank Balances")
             elif view == "Mini Cards":
-                cols = st.columns(3)
-                for i, row in df_bal_view.iterrows():
-                    render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                display_as_mini_cards(df_bal_view, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
             elif view == "Progress Bars":
-                # This display type is inherently different, so it's kept as is.
-                max_amount = df_bal_view["balance"].max()
-                for _, row in df_bal_view.iterrows():
-                    percentage = (row["balance"] / max_amount) * 100 if max_amount > 0 else 0
-                    st.markdown(
-                        f"""
-                        <div style="margin-bottom:16px;">
-                            <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
-                                <span><strong>{row['bank']}</strong></span>
-                                <span><strong>{fmt_currency(row['balance'])}</strong></span>
-                            </div>
-                            <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
-                                <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+                display_as_progress_bars(df_bal_view, "bank", "balance")
             elif view == "Metrics":
-                cols = st.columns(min(4, len(df_bal_view)))
-                for i, row in df_bal_view.iterrows():
-                    if i < 4:
-                        render_main_kpi_card(cols[i], row['bank'], row['balance'], prefix="SAR ", decimals=0)
-            else: # Table View
+                display_as_metrics(df_bal_view, "bank", "balance")
+            else:
                 table = df_bal_view.copy()
                 rename_map = {"bank": "Bank", "balance": "Balance"}
                 if "after_settlement" in table.columns:
@@ -1244,35 +1288,29 @@ def main():
                 c1, c2 = st.columns([3, 1])
                 with c1:
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df_fm["date"],
-                                                 y=df_fm["total_liquidity"],
-                                                 mode='lines+markers',
-                                                 line=dict(width=3), 
-                                                 marker=dict(size=6)))
+                    fig.add_trace(go.Scatter(x=df_fm["date"], y=df_fm["total_liquidity"], mode='lines+markers', line=dict(width=3), marker=dict(size=6)))
                     fig.update_layout(template="brand", title="Total Liquidity Trend",
                                       xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
                                       margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
                     fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
-                    c1.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG) # FIX: Call .plotly_chart on the column object 'c1'
+                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
                 with c2:
                     st.markdown("### 📊 Liquidity Metrics")
-                    render_main_kpi_card(st, "Current", latest_liquidity, prefix="SAR ", decimals=0)
-                    if len(df_fm) > 1:
-                         render_main_kpi_card(st, "Trend", None, prefix="", decimals=0, delta=trend_text) # Delta already formatted
+                    st.metric("Current", fmt_number_only(latest_liquidity))
+                    if len(df_fm) > 1: st.metric("Trend", trend_text)
                     st.markdown("**Statistics (30d)**")
                     last30 = df_fm.tail(30)
                     st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
                     st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
                     st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
-            except Exception as e: # Catch and log the specific exception
-                logger.error(f"Plotly chart in tab_bank failed: {e}")
-                st.error(f"❌ Plotly chart in 'Liquidity Trend Analysis' failed to render. Showing basic chart. Error: {e}") # Show the actual error message
+            except Exception:
+                st.error("❌ Unable to display liquidity trend analysis")
                 st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
         st.markdown("---")
         st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
         if df_cvp.empty:
-            st.info("No data in 'Collection vs Payments by Branch'. Make sure the sheet has 'Branch', 'Collection', 'Payments'.")
+            st.info("No data in \'Collection vs Payments by Branch\'. Make sure the sheet has \'Branch\', \'Collection\', \'Payments\'.")
         else:
             cvp_view = st.radio("", options=["Bars", "Table", "Cards"], index=0, horizontal=True, label_visibility="collapsed")
             cvp_sorted = df_cvp.sort_values("net", ascending=False).reset_index(drop=True)
@@ -1301,10 +1339,8 @@ def main():
                     except Exception: return ''
                 styled = styled.applymap(_net_red, subset=["Net"])
                 st.dataframe(styled, use_container_width=True, height=420)
-            else: # Cards
-                cols = st.columns(3)
-                for i, row in cvp_sorted.iterrows():
-                    render_main_kpi_card(cols[i % 3], row['branch'], row['net'], prefix="SAR ", decimals=0)
+            else:
+                display_as_mini_cards(cvp_sorted.rename(columns={"net":"balance"}), "branch", "balance", pad=pad, radius=radius, shadow=shadow)
 
     # ---- Settlements tab ----
     with tab_settlements:
@@ -1330,12 +1366,11 @@ def main():
                 
                 if settlement_view == "Summary + Table":
                     cc1, cc2, cc3 = st.columns(3)
-                    render_main_kpi_card(cc1, f"Total {status_label} Amount", view_data["amount"].sum(), prefix="SAR ", decimals=0)
-                    render_main_kpi_card(cc2, f"Number of {status_label}", len(view_data), prefix="", decimals=0)
+                    with cc1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
+                    with cc2: st.metric(f"Number of {status_label}", len(view_data))
                     
                     if status_label == "Pending":
-                        urgent_count = len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)])
-                        render_main_kpi_card(cc3, "Urgent (2 days)", urgent_count, prefix="", decimals=0)
+                        with cc3: st.metric("Urgent (2 days)", len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
                         
                         # Add urgency indicators for pending settlements
                         viz = view_data.copy()
@@ -1382,76 +1417,23 @@ def main():
                     st.markdown("**📊 LCR & STL Settlements by Urgency**")
                     if not urgent.empty:
                         st.markdown("**🚨 Urgent (≤2 days)**")
-                        # Using raw progress bars here, as they are not simple metrics
-                        max_amount_urgent = urgent["amount"].sum()
-                        for _, row in urgent.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount":"balance"}).iterrows():
-                            percentage = (row["balance"] / max_amount_urgent) * 100 if max_amount_urgent > 0 else 0
-                            st.markdown(
-                                f"""
-                                <div style="margin-bottom:16px;">
-                                    <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
-                                        <span><strong>{row['bank']}</strong></span>
-                                        <span><strong>{fmt_currency(row['balance'])}</strong></span>
-                                    </div>
-                                    <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
-                                        <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
+                        display_as_progress_bars(urgent.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}))
                     if not warning.empty:
                         st.markdown("**⚠️ Warning (3-7 days)**")
-                        max_amount_warning = warning["amount"].sum()
-                        for _, row in warning.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount":"balance"}).iterrows():
-                            percentage = (row["balance"] / max_amount_warning) * 100 if max_amount_warning > 0 else 0
-                            st.markdown(
-                                f"""
-                                <div style="margin-bottom:16px;">
-                                    <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
-                                        <span><strong>{row['bank']}</strong></span>
-                                        <span><strong>{fmt_currency(row['balance'])}</strong></span>
-                                    </div>
-                                    <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
-                                        <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
+                        display_as_progress_bars(warning.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}))
                     if not normal.empty:
                         st.markdown("**✅ Normal (>7 days)**")
-                        max_amount_normal = normal["amount"].sum()
-                        for _, row in normal.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount":"balance"}).iterrows():
-                            percentage = (row["balance"] / max_amount_normal) * 100 if max_amount_normal > 0 else 0
-                            st.markdown(
-                                f"""
-                                <div style="margin-bottom:16px;">
-                                    <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
-                                        <span><strong>{row['bank']}</strong></span>
-                                        <span><strong>{fmt_currency(row['balance'])}</strong></span>
-                                    </div>
-                                    <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
-                                        <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
+                        display_as_progress_bars(normal.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"}))
                 
                 elif settlement_view == "Progress by Urgency" and status_label == "Paid":
                     st.info("Progress by urgency view is only available for pending settlements.")
                     # Show bank summary for paid
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                    cols = st.columns(3)
-                    for i, row in bank_totals.iterrows():
-                        render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                    display_as_progress_bars(bank_totals, "bank", "balance")
                 
                 else:  # Mini Cards
                     cards = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                    cols = st.columns(3)
-                    for i, row in cards.iterrows():
-                        render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                    display_as_mini_cards(cards, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
             else:
                 st.info("No settlements match the selected criteria.")
         
@@ -1480,10 +1462,9 @@ def main():
                                         index=0, horizontal=True, key=f"payment_view_{key_suffix}")
                 if payment_view == "Summary + Table":
                     c1, c2, c3 = st.columns(3)
-                    render_main_kpi_card(c1, f"Total {status_label} Amount", view_data["amount"].sum(), prefix="SAR ", decimals=0)
-                    render_main_kpi_card(c2, "Number of Payments", len(view_data), prefix="", decimals=0)
-                    render_main_kpi_card(c3, "Average Payment", view_data["amount"].mean(), prefix="SAR ", decimals=0)
-                    
+                    with c1: st.metric(f"Total {status_label} Amount", fmt_number_only(view_data["amount"].sum()))
+                    with c2: st.metric("Number of Payments", len(view_data))
+                    with c3: st.metric("Average Payment", fmt_number_only(view_data["amount"].mean()))
                     grp = (view_data.groupby("bank", as_index=False)["amount"]
                            .sum().sort_values("amount", ascending=False)
                            .rename(columns={"bank": "Bank", "amount": "Amount"}))
@@ -1496,251 +1477,111 @@ def main():
                     st.dataframe(style_right(v, num_cols=["Amount"]), use_container_width=True, height=360)
                 elif payment_view == "Mini Cards":
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                    cols = st.columns(3)
-                    for i, row in bank_totals.iterrows():
-                        render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                    display_as_mini_cards(bank_totals, "bank", "balance", pad=pad, radius=radius, shadow=shadow)
                 elif payment_view == "List":
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                    if not bank_totals.empty:
-                        st.markdown(f"<span class='section-chip'>{status_label} Payments by Bank</span>", unsafe_allow_html=True)
-                        for _, row in bank_totals.iterrows():
-                            col1, = st.columns(1) # Using columns to render KPI-like structure
-                            render_main_kpi_card(col1, row['bank'], row['balance'], prefix="SAR ", decimals=0)
-                else: # Progress Bars
+                    display_as_list(bank_totals, "bank", "balance", f"{status_label} Payments by Bank")
+                else:
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                    # This display type is inherently different, so it's kept as is.
-                    max_amount_total = bank_totals["balance"].max()
-                    for _, row in bank_totals.iterrows():
-                        percentage = (row["balance"] / max_amount_total) * 100 if max_amount_total > 0 else 0
-                        st.markdown(
-                            f"""
-                            <div style="margin-bottom:16px;">
-                                <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:14px;">
-                                    <span><strong>{row['bank']}</strong></span>
-                                    <span><strong>{fmt_currency(row['balance'])}</strong></span>
-                                </div>
-                                <div style="width:100%;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
-                                    <div style="height:100%;background:linear-gradient(90deg,{THEME['accent1']} 0%,{THEME['accent2']} 100%);border-radius:4px;width:{percentage}%;"></div>
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
+                    display_as_progress_bars(bank_totals, "bank", "balance")
             else:
                 st.info("No payments match the selected criteria.")
         tab_approved, tab_released = st.tabs(["Approved", "Released"])
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Export LC tab ----
+    # ---- Export LC tab (new position, new filter) ----
     with tab_export_lc:
         st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
         else:
-            # Filters: Branch, Advising Bank, Maturity Date (top-level)
+            # Create filters
             col1, col2 = st.columns(2)
             with col1:
-                branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
+                branches = sorted(df_export_lc["branch"].unique())
                 selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
-            with col2:
-                advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique()) if "advising_bank" in df_export_lc.columns else []
-                if advising_banks:
-                    selected_advising_banks = st.multiselect("Filter by Advising Bank", options=advising_banks, default=advising_banks, key="export_lc_advising_filter")
+                
+                if 'status' in df_export_lc.columns:
+                    statuses = sorted(df_export_lc["status"].dropna().astype(str).unique())
+                    selected_statuses = st.multiselect("Filter by Status", options=statuses, default=statuses, key="export_lc_status_filter")
                 else:
-                    selected_advising_banks = []
+                    selected_statuses = []
 
-            # Maturity Date filters (replacing Submitted Date, keep rows with no maturity_date)
-            mat_dates = df_export_lc["maturity_date"].dropna() if "maturity_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
-            min_mat_default = (mat_dates.min().date() if not mat_dates.empty else (datetime.today().date().replace(day=1)))
-            max_mat_default = (mat_dates.max().date() if not mat_dates.empty else datetime.today().date())
-            d1, d2 = st.columns(2)
-            with d1:
-                start_maturity_filter = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
-            with d2:
-                end_maturity_filter = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
+            with col2:
+                min_date = df_export_lc["submitted_date"].min().date()
+                start_date_filter = st.date_input("From Submitted Date", value=min_date, key="export_lc_start_date")
+                end_date_filter = st.date_input("To Submitted Date", value=df_export_lc["submitted_date"].max().date(), key="export_lc_end_date")
 
-            # Apply branch + advising bank filters first
-            filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
-            if selected_advising_banks and "advising_bank" in filtered_df_base.columns:
-                filtered_df_base = filtered_df_base[filtered_df_base["advising_bank"].isin(selected_advising_banks)]
+            # Apply branch and status filters first
+            filtered_df = df_export_lc[df_export_lc["branch"].isin(selected_branches)]
+            
+            if 'status' in filtered_df.columns and selected_statuses:
+                filtered_df = filtered_df[filtered_df["status"].isin(selected_statuses)]
 
-            # Apply Maturity Date filter robustly (normalize to day, keep NaT)
-            if "maturity_date" in filtered_df_base.columns:
-                maturity_ts = pd.to_datetime(filtered_df_base["maturity_date"], errors='coerce')
-                # Drop timezone if any
-                try:
-                    maturity_ts = maturity_ts.dt.tz_localize(None)
-                except Exception:
-                    try:
-                        maturity_ts = maturity_ts.dt.tz_convert(None)
-                    except Exception:
-                        pass
-                maturity_norm = maturity_ts.dt.normalize()
-                start_ts = pd.to_datetime(start_maturity_filter)
-                end_ts = pd.to_datetime(end_maturity_filter)
-                date_mask = maturity_norm.between(start_ts, end_ts)
-                no_date_mask = maturity_norm.isna()
-                filtered_df_base = filtered_df_base[date_mask | no_date_mask].copy()
+            # Apply date filter while keeping rows with no date
+            date_mask = (filtered_df["submitted_date"].dt.date >= start_date_filter) & (filtered_df["submitted_date"].dt.date <= end_date_filter)
+            no_date_mask = filtered_df["submitted_date"].isna()
+            filtered_df = filtered_df[date_mask | no_date_mask].copy()
+            
+            # Display metrics (without average)
+            st.markdown("---")
+            m1, m2 = st.columns(2)
+            m1.metric("Total Value (SAR)", fmt_number_only(filtered_df['value_sar'].sum()))
+            m2.metric("Total LCs", len(filtered_df))
 
-            # Status as tabs
-            statuses = []
-            if "status" in filtered_df_base.columns:
-                statuses = sorted([s for s in filtered_df_base["status"].dropna().astype(str).str.strip().str.upper().unique() if s])
-            status_tabs = st.tabs(["ALL"] + statuses if statuses else ["ALL"])
-            status_keys = ["ALL"] + statuses if statuses else ["ALL"]
+            # Summary by Branch (based on current filters, without average)
+            st.markdown("#### Summary by Branch")
+            if not filtered_df.empty:
+                summary_by_branch = (
+                    filtered_df.groupby('branch', as_index=False)
+                               .agg(
+                                   LCs=('value_sar', 'size'),
+                                   Total_Value_SAR=('value_sar', 'sum'),
+                               )
+                               .rename(columns={
+                                   'branch': 'Branch',
+                                   'Total_Value_SAR': 'Total Value (SAR)',
+                               })
+                               .sort_values('Total Value (SAR)', ascending=False)
+                )
+                st.dataframe(
+                    style_right(summary_by_branch, num_cols=['LCs', 'Total Value (SAR)']),
+                    use_container_width=True,
+                    height=300
+                )
+            else:
+                st.info("No records to summarize for the selected filters.")
 
-            for tab, status_key in zip(status_tabs, status_keys):
-                with tab:
-                    if status_key == "ALL":
-                        filtered_df = filtered_df_base.copy()
-                    else:
-                        filtered_df = filtered_df_base[filtered_df_base["status"].astype(str).str.strip().str.upper() == status_key].copy()
-
-                    # KPIs
-                    st.markdown("---")
-                    
-                    # Total Value metric
-                    total_value = filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0
-                    
-                    # Accepted LCs current month maturity sum (UPDATED to use 'maturing_current_month' column)
-                    accepted_mtd_value = 0.0
-                    if not filtered_df.empty and 'status' in filtered_df.columns and 'maturing_current_month' in filtered_df.columns:
-                        mask = filtered_df['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
-                        accepted_mtd_value = filtered_df.loc[mask, 'maturing_current_month'].sum()
-                        if pd.isna(accepted_mtd_value):
-                            accepted_mtd_value = 0.0
-                    elif not filtered_df.empty and 'status' in filtered_df.columns and 'maturity_date' in filtered_df.columns and 'value_sar' in filtered_df.columns:
-                        now = pd.Timestamp.now()
-                        start_month = now.replace(day=1)
-                        end_month = (start_month + pd.offsets.MonthEnd(1))
-                        maturity_series = pd.to_datetime(filtered_df['maturity_date'], errors='coerce')
-                        try:
-                            maturity_series = maturity_series.dt.tz_localize(None)
-                        except Exception:
-                            try:
-                                maturity_series = maturity_series.dt.tz_convert(None)
-                            except Exception:
-                                pass
-                        mask = (filtered_df['status'] == 'ACCEPTED') & \
-                               (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
-                        accepted_mtd_value = filtered_df.loc[mask, 'value_sar'].sum()
-                        if pd.isna(accepted_mtd_value):
-                            accepted_mtd_value = 0.0
-
-                    m1, m2 = st.columns(2)
-                    render_main_kpi_card(m1, "Total Value (SAR)", total_value, prefix="SAR ", decimals=0)
-                    
-                    # Conditional display of "Accepted Due this Month (SAR)"
-                    if status_key == "ACCEPTED":
-                        render_main_kpi_card(m2, "Accepted Due this Month (SAR)", accepted_mtd_value, prefix="SAR ", decimals=0)
-
-
-                    # Summary by Branch
-                    st.markdown("#### Summary by Branch")
-                    if not filtered_df.empty and {'branch','value_sar'}.issubset(filtered_df.columns):
-                        summary_by_branch = (
-                            filtered_df.groupby('branch', as_index=False)
-                                       .agg(
-                                           LCs=('value_sar', 'size'),
-                                           Total_Value_SAR=('value_sar', 'sum'),
-                                       )
-                                       .rename(columns={'branch': 'Branch', 'Total_Value_SAR': 'Total Value (SAR)'})
-                                       .sort_values('Total Value (SAR)', ascending=False)
-                        )
-                        st.dataframe(
-                            style_right(summary_by_branch, num_cols=['LCs', 'Total Value (SAR)']),
-                            use_container_width=True,
-                            height=300
-                        )
-                    else:
-                        st.info("No records to summarize for the selected filters.")
-
-                    # ---- Detailed View (table-only maturity date filters + clean 'None' + DD-MM-YYYY for Maturity) ----
-                    st.markdown("#### Detailed View")
-
-                    _tmp = locals().get("filtered_df", None)
-                    table_base = _tmp.copy() if _tmp is not None else filtered_df_base.copy()
-
-                    # Apply table-specific Maturity Date filters if column exists
-                    if 'maturity_date' in table_base.columns:
-                        mdates = pd.to_datetime(table_base['maturity_date'], errors='coerce')
-                        try:
-                            mdates = mdates.dt.tz_localize(None)
-                        except Exception:
-                            try:
-                                mdates = mdates.dt.tz_convert(None)
-                            except Exception:
-                                pass
-                        
-                        min_date = mdates.dropna().min().normalize().date() if mdates.notna().any() else datetime.today().date().replace(day=1)
-                        max_date = mdates.dropna().max().normalize().date() if mdates.notna().any() else datetime.today().date()
-
-                        dmt1, dmt2 = st.columns(2)
-                        with dmt1:
-                            mat_start = st.date_input(
-                                "From Maturity Date (Table View)",
-                                value=min_date, 
-                                key=f"export_lc_table_mstart_{status_key}"
-                            )
-                        with dmt2:
-                            mat_end = st.date_input(
-                                "To Maturity Date (Table View)",
-                                value=max_date, 
-                                key=f"export_lc_table_mend_{status_key}"
-                            )
-                        maturity_norm = mdates.dt.normalize()
-                        start_ts = pd.to_datetime(mat_start)
-                        end_ts = pd.to_datetime(mat_end)
-                        in_range = maturity_norm.between(start_ts, end_ts)
-                        table_base = table_base[maturity_norm.isna() | in_range].copy()
-
-                    # Define the desired order and display names of columns for the detailed table
-                    desired_columns_info = [
-                        ('branch', 'Branch'),
-                        ('applicant', 'Applicant'),
-                        ('lc_no', 'L/C No'),
-                        ('advising_bank', 'Advising Bank'),
-                        ('maturity_date', 'Maturity Date'),    # Explicitly included here
-                        ('value_sar', 'Value (SAR)'),
-                        ('maturing_current_month', 'Maturing Current Month'), 
-                        ('status', 'Status'),
-                        ('remarks', 'Remarks')
-                    ]
-                    
-                    cols_to_show_internal = [col_name for col_name, _ in desired_columns_info if col_name in table_base.columns]
-                    display_name_map = {col_name: display_name for col_name, display_name in desired_columns_info if col_name in table_base.columns}
-
-                    if not table_base.empty and cols_to_show_internal:
-                        table_view = table_base[cols_to_show_internal].copy()
-                        table_view = table_view.rename(columns=display_name_map)
-
-                        # Format 'Maturity Date' to DD-MM-YYYY and replace NaT with empty string
-                        if 'Maturity Date' in table_view.columns:
-                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce') \
-                                                             .dt.strftime('%d-%m-%Y') \
-                                                             .replace({pd.NaT: ''}) # Convert NaT to empty string
-
-                        # Clean 'None'/'NaT'/'nan' text from other object columns
-                        obj_cols_to_clean = [col for col in table_view.select_dtypes(include='object').columns if col != 'Maturity Date']
-                        if obj_cols_to_clean:
-                            for col in obj_cols_to_clean:
-                                table_view[col] = (
-                                    table_view[col]
-                                    .astype(str)
-                                    .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''}, regex=True)
-                                    .fillna('')
-                                )
-                        
-                        num_cols = [c for c in ['Value (SAR)', 'Maturing Current Month'] if c in table_view.columns]
-
-                        st.dataframe(
-                            style_right(table_view, num_cols=num_cols), 
-                            use_container_width=True, 
-                            height=500
-                        )
-                    else:
-                        st.info("No records available for the detailed view after applying filters.")
+            # Detailed table
+            st.markdown("#### Detailed View")
+            display_cols = {
+                'branch': 'Branch',
+                'applicant': 'Applicant',
+                'lc_no': 'LC No.',
+                'issuing_bank': 'Issuing Bank',
+                'submitted_date': 'Submitted Date',
+                'maturity_date': 'Maturity Date',
+                'value_sar': 'Value (SAR)',
+                'status': 'Status',
+                'remarks': 'Remarks'
+            }
+            
+            cols_to_show = {k: v for k, v in display_cols.items() if k in filtered_df.columns}
+            
+            table_view = filtered_df[list(cols_to_show.keys())].rename(columns=cols_to_show)
+            
+            # Safely format date columns
+            if 'Submitted Date' in table_view.columns:
+                table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
+            if 'Maturity Date' in table_view.columns:
+                 table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
+            
+            st.dataframe(
+                style_right(table_view, num_cols=['Value (SAR)']), 
+                use_container_width=True, 
+                height=500
+            )
 
     # ---- Exchange Rates tab ----
     with tab_fx:
@@ -1758,26 +1599,45 @@ def main():
                 if not latest_fx.empty:
                     cols = st.columns(min(4, len(latest_fx)))
                     for i, row in latest_fx.iterrows():
-                        render_main_kpi_card(
-                            cols[int(i) % min(4, len(latest_fx))], # Pass the column object
-                            row["currency_pair"],
-                            row["rate"],
-                            prefix="", # FX rates usually don't have a currency prefix on the number itself
-                            decimals=4,
-                            delta=(f"{'📈' if row['change_pct'] >= 0 else '📉'} {row['change_pct']:+.2f}%") if pd.notna(row["change_pct"]) else None
-                        )
-                            
+                        with cols[int(i) % min(4, len(latest_fx))]:
+                            pair = row["currency_pair"]
+                            rate = row["rate"]
+                            change_info = ""
+                            if "change_pct" in row and pd.notna(row["change_pct"]):
+                                change_pct = row["change_pct"]
+                                change_color = "#059669" if change_pct >= 0 else "#dc2626"
+                                change_symbol = "📈" if change_pct >= 0 else "📉"
+                                change_info = f"""
+                                <div style="margin-top:8px; font-size:12px; color:{change_color}; font-weight:600;">
+                                    {change_symbol} {change_pct:+.2f}%
+                                </div>
+                                """
+                            st.markdown(
+                                f"""
+                                <div class="dash-card" style="background:{THEME['heading_bg']};padding:{pad};border-radius:{radius};
+                                     border-left:4px solid {THEME['accent1']};margin-bottom:12px;box-shadow:{shadow};">
+                                    <div style="font-size:12px;color:#0f172a;font-weight:700;margin-bottom:8px;">{pair}</div>
+                                    <div style="font-size:20px;font-weight:800;color:#0f172a;text-align:right;">{fmt_rate(rate)}</div>
+                                    <div style="font-size:10px;color:#1e293b;opacity:.7;margin-top:6px;">Exchange Rate</div>
+                                    {change_info}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
-                render_main_kpi_card(col1, "Currency Pairs", len(latest_fx), prefix="", decimals=0)
-                if "change_pct" in latest_fx.columns:
-                    avg_change = latest_fx["change_pct"].mean()
-                    render_main_kpi_card(col2, "Avg Change %", avg_change, prefix="", decimals=2) # Delta param is a %
-                last_update = latest_fx["date"].max() if "date" in latest_fx.columns else None
-                if pd.notna(last_update):
-                    render_main_kpi_card(col3, "Last Update", last_update.strftime(config.DATE_FMT), prefix="", decimals=0)
-                else:
-                    render_main_kpi_card(col3, "Last Update", "N/A", prefix="", decimals=0)
+                with col1:
+                    st.metric("Currency Pairs", len(latest_fx))
+                with col2:
+                    if "change_pct" in latest_fx.columns:
+                        avg_change = latest_fx["change_pct"].mean()
+                        st.metric("Avg Change %", f"{avg_change:.2f}%" if pd.notna(avg_change) else "N/A")
+                with col3:
+                    last_update = latest_fx["date"].max() if "date" in latest_fx.columns else "N/A"
+                    if pd.notna(last_update):
+                        st.metric("Last Update", last_update.strftime(config.DATE_FMT))
+                    else:
+                        st.metric("Last Update", "N/A")
             
             elif fx_view == "Rate Trends":
                 st.subheader("📈 Exchange Rate Trends")
@@ -1962,8 +1822,11 @@ def main():
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
 
-    # Removed the auto refresh block as requested.
+    if st.session_state.get("auto_refresh"):
+        interval = int(st.session_state.get("auto_interval", 120))
+        with st.status(f"Auto refreshing in {interval}s…", expanded=False):
+            time.sleep(interval)
+        st.rerun()
 
 if __name__ == "__main__":
-    set_app_font() # Ensure font is set at the start
     main()
