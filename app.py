@@ -1500,29 +1500,15 @@ def main():
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
         else:
-            # Filters: Branch (with search), Advising Bank (with search), Maturity Date (top-level)
+            # Filters: Branch, Advising Bank, Maturity Date (top-level)
             col1, col2 = st.columns(2)
             with col1:
-                # Branch filter with search
                 branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
-                search_branch = st.text_input("Search Branch", key="search_branch")
-                if search_branch:
-                    filtered_branches = [b for b in branches if search_branch.lower() in b.lower()]
-                else:
-                    filtered_branches = branches
-                default_branch = branches if not search_branch else []
-                selected_branches = st.multiselect("Filter by Branch", options=filtered_branches, default=default_branch, key="export_lc_branch_filter")
+                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
             with col2:
-                # Advising Bank filter with search
-                if "advising_bank" in df_export_lc.columns:
-                    advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
-                    search_advising = st.text_input("Search Advising Bank", key="search_advising")
-                    if search_advising:
-                        filtered_advising = [b for b in advising_banks if search_advising.lower() in b.lower()]
-                    else:
-                        filtered_advising = advising_banks
-                    default_advising = advising_banks if not search_advising else []
-                    selected_advising_banks = st.multiselect("Filter by Advising Bank", options=filtered_advising, default=default_advising, key="export_lc_advising_filter")
+                advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique()) if "advising_bank" in df_export_lc.columns else []
+                if advising_banks:
+                    selected_advising_banks = st.multiselect("Filter by Advising Bank", options=advising_banks, default=advising_banks, key="export_lc_advising_filter")
                 else:
                     selected_advising_banks = []
 
@@ -1633,7 +1619,7 @@ def main():
                     else:
                         st.info("No records to summarize for the selected filters.")
 
-                    # ---- Detailed View (table-only maturity date filters + clean 'None'/'NaT' + DD-MM-YYYY for Maturity) ----
+                    # ---- Detailed View (table-only maturity date filters + clean 'None' + DD-MM-YYYY for Maturity) ----
                     st.markdown("#### Detailed View")
 
                     # Safe fallback without boolean-evaluating DataFrames
