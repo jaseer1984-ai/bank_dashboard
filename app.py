@@ -1494,15 +1494,16 @@ def main():
         with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
-    # ---- Export LC tab (single, final) ----
-        with tab_export_lc:
-            st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
-    
+    # ---- Export LC tab ----
+      # ---- Export LC tab ----
+    with tab_export_lc:
+        st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
         if df_export_lc.empty:
             st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
-            else:
-            # Filters: Branch + Advising Bank
+        else:
+            # Filters: Branch, Advising Bank, Maturity Date (top-level)
             col1, col2 = st.columns(2)
+
             with col1:
                 branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
                 branch_options = ["All"] + branches
@@ -1510,187 +1511,311 @@ def main():
                     "Filter by Branch",
                     options=branch_options,
                     index=0,
-                        key="export_lc_branch_radio",
+                     key="export_lc_branch_radio_top_v2",  # ← changed
+                    horizontal=True
+                )
+                selected_branches = branches if branch_choice == "All" else [branch_choice]
+
+            with col2:
+                advising_banks = []
+                if "advising_bank" in df_export_lc.columns:
+                    advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
+
+                if advising_banks:
+                    adv_options = ["All"] + advising_banks
+                    adv_choice = st.radio(
+                        "Filter by Advising Bank",
+                        options=adv_options,
+                        index=0,
+                        key="export_lc_advising_radio_top_v2",  # ← changed
                         horizontal=True
                     )
-                    selected_branches = branches if branch_choice == "All" else [branch_choice]
-        
-                with col2:
-                    advising_banks = sorted(
-                        df_export_lc.get("advising_bank", pd.Series(dtype=str)).dropna().astype(str).unique()
-                    )
-                    if advising_banks:
-                        adv_options = ["All"] + advising_banks
-                        adv_choice = st.radio(
-                            "Filter by Advising Bank",
-                            options=adv_options,
-                            index=0,
-                            key="export_lc_advising_radio",
-                            horizontal=True
-                        )
-                        selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
+                    selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
+                else:
+                    selected_advising_banks = []
+
+            # Maturity Date filters (replacing Submitted Date, keep rows with no maturity_date)
+            mat_dates = df_export_lc["maturity_date"].dropna() if "maturity_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
+            min_mat_default = (mat_dates.min().date() if not mat_dates.empty else (datetime.today().date().replace(day=1)))
+            max_mat_default = (mat_dates.max().date() if not mat_dates.empty else datetime.today().date())
+            d1, d2 = st.columns(2)
+            with d1:
+                start_maturity_filter = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
+            with d2:
+                end_maturity_filter = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
+
+            # Apply branch + advising bank filters first
+            filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
+            if selected_advising_banks and "advising_bank" in filtered_df_base.columns:
+                filtered_df_base = filtered_df_base[filtered_df_base["advising_bank"].isin(selected_advising_banks)]
+
+            # Apply Maturity Date filter robustly (normalize to day, keep NaT)
+            if "maturity_date" in filtered_df_base.columns:
+                maturity_ts = pd.to_datetime(filtered_df_base["maturity_date"], errors='coerce')
+                # Drop timezone if any
+                try:
+                    maturity_ts = maturity_ts.dt.tz_localize(None)
+                except Exception:
+                    try:
+                        maturity_ts = maturity_ts.dt.tz_convert(None)
+                    except Exception:
+                        pass
+                maturity_norm = maturity_ts.dt.normalize()
+                start_ts = pd.to_datetime(start_maturity_filter)
+                end_ts = pd.to_datetime(end_maturity_filter)
+                date_mask = maturity_norm.between(start_ts, end_ts)
+                no_date_mask = maturity_norm.isna()
+                filtered_df_base = filtered_df_base[date_mask | no_date_mask].copy()
+
+            # Status as tabs
+            statuses = []
+            if "status" in filtered_df_base.columns:
+                statuses = sorted([s for s in filtered_df_base["status"].dropna().astype(str).str.strip().str.upper().unique() if s])
+            status_tabs = st.tabs(["ALL"] + statuses if statuses else ["ALL"])
+            status_keys = ["ALL"] + statuses if statuses else ["ALL"]
+
+            for tab, status_key in zip(status_tabs, status_keys):
+                with tab:
+                    if status_key == "ALL":
+                        filtered_df = filtered_df_base.copy()
                     else:
-                        selected_advising_banks = []
-        
-                # Fixed-status tabs (keeps colors/ordering stable)
-                tab_all, tab_pending, tab_accepted, tab_collected, tab_process = st.tabs(
-                    ["ALL", "ACCEPTANCE PENDING", "ACCEPTED", "COLLECTED", "UNDER PROCESS"]
+                        filtered_df = filtered_df_base[filtered_df_base["status"].astype(str).str.strip().str.upper() == status_key].copy()
+
+    # ---- Export LC tab ----
+    with tab_export_lc:
+        st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
+
+        if df_export_lc.empty:
+            st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
+        else:
+            # Filters: Branch + Advising Bank
+            col1, col2 = st.columns(2)
+
+            with col1:
+                branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
+                branch_options = ["All"] + branches
+                branch_choice = st.radio(
+                    "Filter by Branch",
+                    options=branch_options,
+                    index=0,
+                    key="export_lc_branch_radio",
+                    horizontal=True
                 )
-        
-                for status_key, tab in zip(
-                    ["ALL", "ACCEPTANCE PENDING", "ACCEPTED", "COLLECTED", "UNDER PROCESS"],
-                    [tab_all, tab_pending, tab_accepted, tab_collected, tab_process]
-                ):
-                    with tab:
-                        # Apply filters
-                        filtered_df = df_export_lc.copy()
-                        if selected_branches:
-                            filtered_df = filtered_df[filtered_df["branch"].isin(selected_branches)]
-                        if selected_advising_banks:
-                            filtered_df = filtered_df[filtered_df["advising_bank"].isin(selected_advising_banks)]
-                        if status_key != "ALL":
-                            filtered_df = filtered_df[
-                                filtered_df["status"].astype(str).str.strip().str.upper() == status_key
-                            ]
-        
-                        st.markdown("---")
-        
-                        # KPIs
-                        total_value = float(filtered_df['value_sar'].sum()) if 'value_sar' in filtered_df.columns else 0.0
-        
-                        # Accepted MTD (prefers 'maturing_current_month', falls back to maturity_date window)
-                        accepted_mtd_value = 0.0
-                        if not filtered_df.empty and 'status' in filtered_df.columns and 'maturing_current_month' in filtered_df.columns:
-                            mask_acc = filtered_df['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
-                            accepted_mtd_value = float(filtered_df.loc[mask_acc, 'maturing_current_month'].sum() or 0.0)
-                        elif not filtered_df.empty and {'status','maturity_date','value_sar'}.issubset(filtered_df.columns):
-                            now = pd.Timestamp.now()
-                            start_month = now.replace(day=1)
-                            end_month = (start_month + pd.offsets.MonthEnd(1))
-                            maturity_series = pd.to_datetime(filtered_df['maturity_date'], errors='coerce')
+                selected_branches = branches if branch_choice == "All" else [branch_choice]
+
+            with col2:
+                advising_banks = []
+                if "advising_bank" in df_export_lc.columns:
+                    advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
+
+                if advising_banks:
+                    adv_options = ["All"] + advising_banks
+                    adv_choice = st.radio(
+                        "Filter by Advising Bank",
+                        options=adv_options,
+                        index=0,
+                        key="export_lc_advising_radio",
+                        horizontal=True
+                    )
+                    selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
+                else:
+                    selected_advising_banks = []
+
+            # ---- Status tabs ----
+            tab_all, tab_pending, tab_accepted, tab_collected, tab_process = st.tabs(
+                ["ALL", "ACCEPTANCE PENDING", "ACCEPTED", "COLLECTED", "UNDER PROCESS"]
+            )
+
+            for status_key, tab in zip(
+                ["ALL", "ACCEPTANCE PENDING", "ACCEPTED", "COLLECTED", "UNDER PROCESS"],
+                [tab_all, tab_pending, tab_accepted, tab_collected, tab_process]
+            ):
+                with tab:
+                    # Apply filters
+                    filtered_df = df_export_lc.copy()
+                    if selected_branches:
+                        filtered_df = filtered_df[filtered_df["branch"].isin(selected_branches)]
+                    if selected_advising_banks:
+                        filtered_df = filtered_df[filtered_df["advising_bank"].isin(selected_advising_banks)]
+                    if status_key != "ALL":
+                        filtered_df = filtered_df[filtered_df["status"].astype(str).str.strip().str.upper() == status_key]
+
+                    # KPIs
+                    st.markdown("---")
+
+                    total_value = filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0
+
+                    # Accepted due this month
+                    accepted_mtd_value = 0.0
+                    if not filtered_df.empty and 'status' in filtered_df.columns and 'maturing_current_month' in filtered_df.columns:
+                        mask_acc = filtered_df['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
+                        accepted_mtd_value = filtered_df.loc[mask_acc, 'maturing_current_month'].sum()
+                        if pd.isna(accepted_mtd_value):
+                            accepted_mtd_value = 0.0
+                    elif not filtered_df.empty and {'status','maturity_date','value_sar'}.issubset(filtered_df.columns):
+                        now = pd.Timestamp.now()
+                        start_month = now.replace(day=1)
+                        end_month = (start_month + pd.offsets.MonthEnd(1))
+                        maturity_series = pd.to_datetime(filtered_df['maturity_date'], errors='coerce')
+                        try:
+                            maturity_series = maturity_series.dt.tz_localize(None)
+                        except Exception:
                             try:
-                                maturity_series = maturity_series.dt.tz_localize(None)
+                                maturity_series = maturity_series.dt.tz_convert(None)
                             except Exception:
-                                try:
-                                    maturity_series = maturity_series.dt.tz_convert(None)
-                                except Exception:
-                                    pass
-                            mask_acc = (filtered_df['status'].astype(str).str.upper() == 'ACCEPTED') & \
-                                       (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
-                            accepted_mtd_value = float(filtered_df.loc[mask_acc, 'value_sar'].sum() or 0.0)
-        
+                                pass
+                        mask_acc = (filtered_df['status'].astype(str).str.upper() == 'ACCEPTED') & \
+                                   (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
+                        accepted_mtd_value = filtered_df.loc[mask_acc, 'value_sar'].sum()
+                        if pd.isna(accepted_mtd_value):
+                            accepted_mtd_value = 0.0
+
+                    # Collected + Remaining (only for ALL)
+                    collected_sum = 0.0
+                    if {'status','value_sar'}.issubset(filtered_df.columns):
                         collected_sum = float(
                             filtered_df.loc[
-                                filtered_df['status'].astype(str).str.strip().str.upper() == 'COLLECTED', 'value_sar'
-                            ].sum() or 0.0
-                        ) if {'status','value_sar'}.issubset(filtered_df.columns) else 0.0
-                        remaining_sum = float(total_value - collected_sum)
-        
-                        HIDE_ACCEPTED_TABS = {"COLLECTED", "UNDER PROCESS", "ACCEPTANCE PENDING"}
-        
-                        if status_key == "ALL":
-                            m1, m2, m3, m4 = st.columns(4)
-                            m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                            m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                            m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
-                            m4.metric("Remaining (SAR)", fmt_number_only(remaining_sum))
-                        elif status_key == "ACCEPTED":
-                            m1, m2 = st.columns(2)
-                            m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                            m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                        elif status_key in HIDE_ACCEPTED_TABS:
-                            st.metric("Total Value (SAR)", fmt_number_only(total_value))
-                        else:
-                            st.metric("Total Value (SAR)", fmt_number_only(total_value))
-        
-                        # Summary by Branch
-                        st.markdown("#### Summary by Branch")
-                        if not filtered_df.empty and {'branch','value_sar'}.issubset(filtered_df.columns):
-                            summary_by_branch = (
-                                filtered_df.groupby('branch', as_index=False)
-                                           .agg(LCs=('value_sar', 'size'),
-                                                Total_Value_SAR=('value_sar', 'sum'))
-                                           .rename(columns={'branch': 'Branch', 'Total_Value_SAR': 'Total Value (SAR)'})
-                                           .sort_values('Total Value (SAR)', ascending=False)
-                            )
-                            st.dataframe(
-                                style_right(summary_by_branch, num_cols=['LCs', 'Total Value (SAR)']),
-                                use_container_width=True,
-                                height=300
-                            )
-                        else:
-                            st.info("No records to summarize for the selected filters.")
-        
-                        # Detailed View
-                        st.markdown("#### Detailed View")
-                        table_base = filtered_df.copy()
-        
-                        if 'maturity_date' in table_base.columns:
-                            mdates = pd.to_datetime(table_base['maturity_date'], errors='coerce')
+                                filtered_df['status'].astype(str).str.strip().str.upper() == 'COLLECTED',
+                                'value_sar'
+                            ].sum()
+                        )
+                    remaining_sum = float(total_value - collected_sum)
+
+                    if status_key == "ALL":
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                        m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                        m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
+                        m4.metric("Remaining (SAR)", fmt_number_only(remaining_sum))
+                    elif status_key == "ACCEPTED":
+                        m1, m2 = st.columns(2)
+                        m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                        m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                    elif status_key in ("COLLECTED", "UNDER PROCESS"):
+                        # hide the Accepted metric on these tabs
+                        st.metric("Total Value (SAR)", fmt_number_only(total_value))
+                    else:
+                        # other tabs (e.g., ACCEPTANCE PENDING) keep previous behavior
+                        m1, m2 = st.columns(2)
+                        m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                        m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+
+                    # Summary by Branch
+                    st.markdown("#### Summary by Branch")
+                    if not filtered_df.empty and {'branch','value_sar'}.issubset(filtered_df.columns):
+                        summary_by_branch = (
+                            filtered_df.groupby('branch', as_index=False)
+                                       .agg(
+                                           LCs=('value_sar', 'size'),
+                                           Total_Value_SAR=('value_sar', 'sum'),
+                                       )
+                                       .rename(columns={
+                                           'branch': 'Branch',
+                                           'Total_Value_SAR': 'Total Value (SAR)',
+                                       })
+                                       .sort_values('Total Value (SAR)', ascending=False)
+                        )
+                        st.dataframe(
+                            style_right(summary_by_branch, num_cols=['LCs', 'Total Value (SAR)']),
+                            use_container_width=True,
+                            height=300
+                        )
+                    else:
+                        st.info("No records to summarize for the selected filters.")
+
+                    # Detailed View
+                    st.markdown("#### Detailed View")
+       
+                    # Safe fallback without boolean-evaluating DataFrames
+                    _tmp = locals().get("filtered_df", None)
+                    table_base = _tmp.copy() if _tmp is not None else filtered_df_base.copy()
+
+                    # Apply table-specific Maturity Date filters if column exists
+                    if 'maturity_date' in table_base.columns:
+                        mdates = pd.to_datetime(table_base['maturity_date'], errors='coerce')
+                        # Ensure no timezone issues
+                        try:
+                            mdates = mdates.dt.tz_localize(None)
+                        except Exception:
                             try:
-                                mdates = mdates.dt.tz_localize(None)
+                                mdates = mdates.dt.tz_convert(None)
                             except Exception:
-                                try:
-                                    mdates = mdates.dt.tz_convert(None)
-                                except Exception:
-                                    pass
-        
-                            min_date = mdates.dropna().min().normalize().date() if mdates.notna().any() \
-                                else datetime.today().date().replace(day=1)
-                            max_date = mdates.dropna().max().normalize().date() if mdates.notna().any() \
-                                else datetime.today().date()
-        
-                            dmt1, dmt2 = st.columns(2)
-                            with dmt1:
-                                mat_start = st.date_input(
-                                    "From Maturity Date (Table View)",
-                                    value=min_date,
-                                    key=f"export_lc_table_mstart_{status_key}"
+                                pass
+                        
+                        # Set default filter dates robustly
+                        min_date = mdates.dropna().min().normalize().date() if mdates.notna().any() else datetime.today().date().replace(day=1)
+                        max_date = mdates.dropna().max().normalize().date() if mdates.notna().any() else datetime.today().date()
+
+                        dmt1, dmt2 = st.columns(2)
+                        with dmt1:
+                            mat_start = st.date_input(
+                                "From Maturity Date (Table View)",
+                                value=min_date, # Use the robust default
+                                key=f"export_lc_table_mstart_{status_key}"
+                            )
+                        with dmt2:
+                            mat_end = st.date_input(
+                                "To Maturity Date (Table View)",
+                                value=max_date, # Use the robust default
+                                key=f"export_lc_table_mend_{status_key}"
+                            )
+                        # Filter by normalized day; keep rows with no maturity_date
+                        maturity_norm = mdates.dt.normalize()
+                        start_ts = pd.to_datetime(mat_start)
+                        end_ts = pd.to_datetime(mat_end)
+                        in_range = maturity_norm.between(start_ts, end_ts)
+                        table_base = table_base[maturity_norm.isna() | in_range].copy()
+
+                    # Define the desired order and display names of columns for the detailed table
+                    # Ensure 'maturity_date' is explicitly included, 'submitted_date' is not.
+                    desired_columns_info = [
+                        ('branch', 'Branch'),
+                        ('applicant', 'Applicant'),
+                        ('lc_no', 'L/C No'),
+                        ('advising_bank', 'Advising Bank'),
+                        ('maturity_date', 'Maturity Date'), # Explicitly included
+                        ('value_sar', 'Value (SAR)'),
+                        ('maturing_current_month', 'Maturing Current Month'), 
+                        ('status', 'Status'),
+                        ('remarks', 'Remarks')
+                    ]
+                    
+                    # Filter for columns that actually exist in the table_base DataFrame
+                    # and create the list of columns to show, and their display names
+                    cols_to_show_internal = [col_name for col_name, _ in desired_columns_info if col_name in table_base.columns]
+                    display_name_map = {col_name: display_name for col_name, display_name in desired_columns_info if col_name in table_base.columns}
+
+                    if not table_base.empty and cols_to_show_internal:
+                        table_view = table_base[cols_to_show_internal].copy()
+                        table_view = table_view.rename(columns=display_name_map)
+
+                        # Format 'Maturity Date' to DD-MM-YYYY and replace NaT with empty string
+                        if 'Maturity Date' in table_view.columns:
+                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce') \
+                                                             .dt.strftime('%d-%m-%Y') \
+                                                             .replace({pd.NaT: ''}) # Convert NaT to empty string
+
+                        # Clean 'None'/'NaT'/'nan' text from other object columns
+                        obj_cols_to_clean = [col for col in table_view.select_dtypes(include='object').columns if col != 'Maturity Date']
+                        if obj_cols_to_clean:
+                            for col in obj_cols_to_clean:
+                                table_view[col] = (
+                                    table_view[col]
+                                    .astype(str) # Ensure it's string type for replace/fillna
+                                    .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''}, regex=True)
+                                    .fillna('')
                                 )
-                            with dmt2:
-                                mat_end = st.date_input(
-                                    "To Maturity Date (Table View)",
-                                    value=max_date,
-                                    key=f"export_lc_table_mend_{status_key}"
-                                )
-        
-                            maturity_norm = mdates.dt.normalize()
-                            start_ts = pd.to_datetime(mat_start)
-                            end_ts = pd.to_datetime(mat_end)
-                            in_range = maturity_norm.between(start_ts, end_ts)
-                            table_base = table_base[maturity_norm.isna() | in_range].copy()
-        
-                        desired_columns_info = [
-                            ('branch', 'Branch'),
-                            ('applicant', 'Applicant'),
-                            ('lc_no', 'L/C No'),
-                            ('advising_bank', 'Advising Bank'),
-                            ('maturity_date', 'Maturity Date'),
-                            ('value_sar', 'Value (SAR)'),
-                            ('maturing_current_month', 'Maturing Current Month'),
-                            ('status', 'Status'),
-                            ('remarks', 'Remarks')
-                        ]
-                        cols_to_show_internal = [c for c, _ in desired_columns_info if c in table_base.columns]
-                        display_name_map = {c: n for c, n in desired_columns_info if c in table_base.columns}
-        
-                        if not table_base.empty and cols_to_show_internal:
-                            table_view = table_base[cols_to_show_internal].rename(columns=display_name_map).copy()
-                            if 'Maturity Date' in table_view.columns:
-                                table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce') \
-                                                                  .dt.strftime('%d-%m-%Y') \
-                                                                  .replace({pd.NaT: ''})
-                            obj_cols = [c for c in table_view.select_dtypes(include='object').columns if c != 'Maturity Date']
-                            for c in obj_cols:
-                                table_view[c] = (
-                                    table_view[c].astype(str)
-                                                 .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''}, regex=True)
-                                                 .fillna('')
-                                )
-                            num_cols = [c for c in ['Value (SAR)', 'Maturing Current Month'] if c in table_view.columns]
-                            st.dataframe(style_right(table_view, num_cols=num_cols), use_container_width=True, height=500)
-                        else:
-                            st.info("No records available for the detailed view after applying filters.")
+                        
+                        # Identify numeric columns for right alignment and formatting
+                        num_cols = [c for c in ['Value (SAR)', 'Maturing Current Month'] if c in table_view.columns]
+
+                        st.dataframe(
+                            style_right(table_view, num_cols=num_cols), 
+                            use_container_width=True, 
+                            height=500
+                        )
+                    else:
+                        st.info("No records available for the detailed view after applying filters.")
 
     # ---- Exchange Rates tab ----
     with tab_fx:
@@ -1936,8 +2061,6 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
-
-
 
 
 
