@@ -1626,33 +1626,73 @@ def main():
                     else:
                         st.info("No records to summarize for the selected filters.")
 
-                    # Detailed table (includes L/C No and Advising Bank)
-                    st.markdown("#### Detailed View")
-                    display_cols = {
-                        'branch': 'Branch',
-                        'applicant': 'Applicant',
-                        'lc_no': 'L/C No',
-                        'advising_bank': 'Advising Bank',
-                        'submitted_date': 'Submitted Date',
-                        'maturity_date': 'Maturity Date',
-                        'value_sar': 'Value (SAR)',
-                        'status': 'Status',
-                        'remarks': 'Remarks'
-                    }
-                    cols_to_show = [k for k in display_cols.keys() if k in filtered_df.columns]
-                    if cols_to_show:
-                        table_view = filtered_df[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
-                        if 'Submitted Date' in table_view.columns:
-                            table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date']).dt.strftime('%Y-%m-%d')
-                        if 'Maturity Date' in table_view.columns:
-                            table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date']).dt.strftime('%Y-%m-%d')
-                        st.dataframe(
-                            style_right(table_view, num_cols=['Value (SAR)']), 
-                            use_container_width=True, 
-                            height=500
-                        )
-                    else:
-                        st.info("No columns available for detailed view.")
+                    # ---- Detailed View (table-only maturity date filters + clean 'None' + DD-MM-YYYY for Maturity) ----
+st.markdown("#### Detailed View")
+
+# Table-specific maturity date filters (do not affect summary/metrics)
+table_base = filtered_df.copy()
+if 'maturity_date' in table_base.columns:
+    mdates = table_base['maturity_date'].dropna()
+    default_m_start = (mdates.min().date() if not mdates.empty else datetime.today().date().replace(day=1))
+    default_m_end = (mdates.max().date() if not mdates.empty else datetime.today().date())
+    dmt1, dmt2 = st.columns(2)
+    with dmt1:
+        mat_start = st.date_input(
+            "From Maturity Date (Table View)",
+            value=default_m_start,
+            key=f"export_lc_table_mstart_{status_key}"
+        )
+    with dmt2:
+        mat_end = st.date_input(
+            "To Maturity Date (Table View)",
+            value=default_m_end,
+            key=f"export_lc_table_mend_{status_key}"
+        )
+    # Filter by maturity date, but keep rows with no maturity_date too
+    table_base = table_base[
+        table_base["maturity_date"].isna()
+        | (
+            (table_base["maturity_date"].dt.date >= mat_start)
+            & (table_base["maturity_date"].dt.date <= mat_end)
+        )
+    ].copy()
+
+# Detailed table (includes L/C No and Advising Bank)
+display_cols = {
+    'branch': 'Branch',
+    'applicant': 'Applicant',
+    'lc_no': 'L/C No',
+    'advising_bank': 'Advising Bank',
+    'submitted_date': 'Submitted Date',
+    'maturity_date': 'Maturity Date',
+    'value_sar': 'Value (SAR)',
+    'status': 'Status',
+    'remarks': 'Remarks'
+}
+cols_to_show = [k for k in display_cols.keys() if k in table_base.columns]
+if cols_to_show:
+    table_view = table_base[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
+
+    # Submitted Date stays YYYY-MM-DD
+    if 'Submitted Date' in table_view.columns:
+        table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+
+    # Maturity Date → DD-MM-YYYY (only in this detailed table view)
+    if 'Maturity Date' in table_view.columns:
+        table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce').dt.strftime('%d-%m-%Y')
+
+    # Remove 'None'/'NaT' text in object columns only (keep numbers numeric)
+    obj_cols = table_view.select_dtypes(include='object').columns
+    if len(obj_cols) > 0:
+        table_view[obj_cols] = table_view[obj_cols].replace({'None': '', 'NaT': '', 'nan': ''}).fillna('')
+
+    st.dataframe(
+        style_right(table_view, num_cols=['Value (SAR)']),
+        use_container_width=True,
+        height=500
+    )
+else:
+    st.info("No columns available for detailed view.")
 
     # ---- Exchange Rates tab ----
     with tab_fx:
@@ -1901,4 +1941,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
