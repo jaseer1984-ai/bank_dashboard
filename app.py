@@ -1395,7 +1395,7 @@ def main():
                                 if row["Days Until Due"] <= 7: return ['background-color: #fef3c7'] * len(row) # Yellow
                             return [''] * len(row)
                         styled = style_right(show, num_cols=["Amount"]).apply(_highlight, axis=1)
-                        # Removed height=None here, Streamlit handles it with use_container_width
+                        # Removed height=None/400 to resolve StreamlitInvalidHeightError
                         st.dataframe(styled, use_container_width=True) 
                         
                         # Urgency warnings for pending
