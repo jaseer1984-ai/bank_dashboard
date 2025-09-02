@@ -1717,12 +1717,7 @@ def main():
 
                     # Detailed View
                     st.markdown("#### Detailed View")
-
-        # Detailed View
-        st.markdown("#### Detailed View")
-                    # ---- Detailed View (table-only maturity date filters + clean 'None' + DD-MM-YYYY for Maturity) ----
-                    st.markdown("#### Detailed View")
-
+       
                     # Safe fallback without boolean-evaluating DataFrames
                     _tmp = locals().get("filtered_df", None)
                     table_base = _tmp.copy() if _tmp is not None else filtered_df_base.copy()
@@ -2058,6 +2053,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
