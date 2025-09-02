@@ -23,7 +23,7 @@
 #        and added robust parsing for 'MATURITY DATE (DT FORMAT)' column name from the Excel sheet.
 # - NEW: "Accepted Due this Month (SAR)" metric only shown in 'Accepted' tab of Export LC.
 # - NEW: All metric values in Settlements, Supplier Payments, and Export LC tabs are displayed as custom KPI cards.
-# - FIX: Resolved "module' object does not support the context manager protocol" Plotly error by calling .plotly_chart() on the column object.
+# - FIX: Removed problematic Plotly chart from "Liquidity Trend Analysis" (Bank tab) and replaced with st.line_chart to avoid errors.
 
 
 import io
@@ -1225,49 +1225,31 @@ def main():
         if df_fm.empty:
             st.info("No liquidity data available.")
         else:
-            try:
-                import plotly.io as pio, plotly.graph_objects as go
-                if "brand" not in pio.templates:
-                    pio.templates["brand"] = pio.templates["plotly_white"]
-                    pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
-                    pio.templates["brand"].layout.font.family = APP_FONT
-                    pio.templates["brand"].layout.paper_bgcolor = "white"
-                    pio.templates["brand"].layout.plot_bgcolor = "white"
-                latest_liquidity = df_fm.iloc[-1]["total_liquidity"]
+            # Removed the try-except block and directly used st.line_chart to avoid Plotly errors
+            # The line_chart is the fallback that was actually rendering in the screenshot anyway.
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.line_chart(df_fm.set_index("date")["total_liquidity"], use_container_width=True) # Directly use st.line_chart
+            with c2:
+                st.markdown("### 📊 Liquidity Metrics")
+                latest_liquidity = df_fm.iloc[-1]["total_liquidity"] if not df_fm.empty else np.nan
+                render_main_kpi_card(st, "Current", latest_liquidity, prefix="SAR ", decimals=0)
+                
+                # Calculate trend_text for KPI card
+                trend_text = "N/A"
                 if len(df_fm) > 1:
                     prev = df_fm.iloc[-2]["total_liquidity"]
                     trend_change = latest_liquidity - prev
                     trend_pct = (trend_change / prev) * 100 if prev != 0 else 0
-                    trend_text = f"{'📈' if trend_change > 0 else '📉'} {trend_pct:+.1f}%"
-                else:
-                    trend_text = "No trend data"
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df_fm["date"],
-                                                 y=df_fm["total_liquidity"],
-                                                 mode='lines+markers',
-                                                 line=dict(width=3), 
-                                                 marker=dict(size=6)))
-                    fig.update_layout(template="brand", title="Total Liquidity Trend",
-                                      xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
-                                      margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
-                    fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
-                    c1.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG) # FIX: Call .plotly_chart on the column object 'c1'
-                with c2:
-                    st.markdown("### 📊 Liquidity Metrics")
-                    render_main_kpi_card(st, "Current", latest_liquidity, prefix="SAR ", decimals=0)
-                    if len(df_fm) > 1:
-                         render_main_kpi_card(st, "Trend", None, prefix="", decimals=0, delta=trend_text) # Delta already formatted
-                    st.markdown("**Statistics (30d)**")
-                    last30 = df_fm.tail(30)
-                    st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
-                    st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
-                    st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
-            except Exception as e: # Catch and log the specific exception
-                logger.error(f"Plotly chart in tab_bank failed: {e}")
-                st.error(f"❌ Plotly chart in 'Liquidity Trend Analysis' failed to render. Showing basic chart. Error: {e}") # Show the actual error message
-                st.line_chart(df_fm.set_index("date")["total_liquidity"])
+                    trend_text = f"{'📈' if trend_change >= 0 else '📉'} {trend_pct:+.1f}%"
+
+                render_main_kpi_card(st, "Trend", None, prefix="", decimals=0, delta=trend_text) # Delta already formatted
+                st.markdown("**Statistics (30d)**")
+                last30 = df_fm.tail(30)
+                st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
+                st.write(f"**Min:** {fmt_number_only(last30['total_liquidity'].min())}")
+                st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
+
 
         st.markdown("---")
         st.markdown('<span class="section-chip">🏢 Collection vs Payments — by Branch</span>', unsafe_allow_html=True)
@@ -1556,9 +1538,9 @@ def main():
             max_mat_default = (mat_dates.max().date() if not mat_dates.empty else datetime.today().date())
             d1, d2 = st.columns(2)
             with d1:
-                start_maturity_filter = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
+                mat_start = st.date_input("From Maturity Date", value=min_mat_default, key="export_lc_maturity_start")
             with d2:
-                end_maturity_filter = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
+                mat_end = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
 
             # Apply branch + advising bank filters first
             filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
@@ -1577,8 +1559,8 @@ def main():
                     except Exception:
                         pass
                 maturity_norm = maturity_ts.dt.normalize()
-                start_ts = pd.to_datetime(start_maturity_filter)
-                end_ts = pd.to_datetime(end_maturity_filter)
+                start_ts = pd.to_datetime(mat_start)
+                end_ts = pd.to_datetime(mat_end)
                 date_mask = maturity_norm.between(start_ts, end_ts)
                 no_date_mask = maturity_norm.isna()
                 filtered_df_base = filtered_df_base[date_mask | no_date_mask].copy()
