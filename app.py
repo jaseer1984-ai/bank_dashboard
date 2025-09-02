@@ -1502,13 +1502,11 @@ def main():
         else:
             # Filters: Branch, Advising Bank, Maturity Date (top-level)
             col1, col2 = st.columns(2)
-         # --- Filters: Branch + Advising Bank (radios with "All") ---
-col1, col2 = st.columns(2)
-
-with col1:
-    branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
-    branch_options = ["All"] + branches
-    branch_choice = st.radio(
+     
+    with col1:
+        branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
+        branch_options = ["All"] + branches
+        branch_choice = st.radio(
         "Filter by Branch",
         options=branch_options,
         index=0,
@@ -1972,5 +1970,6 @@ with col2:
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
