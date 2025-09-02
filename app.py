@@ -1604,22 +1604,18 @@ def main():
                 selected_branches = branches if branch_choice == "All" else [branch_choice]
 
             with col2:
-                advising_banks = []
-                if "advising_bank" in df_export_lc.columns:
-                    advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
-
-                if advising_banks:
-                    adv_options = ["All"] + advising_banks
-                    adv_choice = st.radio(
-                        "Filter by Advising Bank",
-                        options=adv_options,
-                        index=0,
-                        key="export_lc_advising_radio",
-                        horizontal=True
-                    )
-                    selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
-                else:
-                    selected_advising_banks = []
+                # Hide the duplicate Advising Bank radio in this (second) block.
+                # Reuse the selection from the TOP radio: export_lc_advising_radio_top_v2
+                    advising_banks = (
+                        sorted(df_export_lc["advising_bank"].dropna().astype(str).unique())
+                        if "advising_bank" in df_export_lc.columns else []
+                  )
+            adv_choice = st.session_state.get("export_lc_advising_radio_top_v2", "All")
+            selected_advising_banks = (
+            advising_banks if adv_choice == "All"
+            else ([adv_choice] if adv_choice in advising_banks else [])
+        )
+        st.write("")  # intentionally render nothing here
 
             # ---- Status tabs ----
             tab_all, tab_pending, tab_accepted, tab_collected, tab_process = st.tabs(
@@ -2061,6 +2057,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
