@@ -1505,7 +1505,7 @@ def main():
             with col1:
                 branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
                 selected_branches = ["All"] + branches
-                 branch_choice = st.radio(
+                branch_choice = st.radio(
                      "Filter by Branch",
                      options=branch_options,
                      index=0,
@@ -1975,4 +1975,5 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
