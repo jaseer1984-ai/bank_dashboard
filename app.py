@@ -1582,64 +1582,58 @@ def main():
                         filtered_df = filtered_df_base[filtered_df_base["status"].astype(str).str.strip().str.upper() == status_key].copy()
 
                     # KPIs
-                    st.markdown("---")
-                    
-                    # Total Value metric
-                    total_value = filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0
-                    
-                    # Accepted LCs current month maturity sum (UPDATED to use 'maturing_current_month' column)
-                    accepted_mtd_value = 0.0
-                    if not filtered_df.empty and 'status' in filtered_df.columns and 'maturing_current_month' in filtered_df.columns:
-                        mask = filtered_df['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
-                        accepted_mtd_value = filtered_df.loc[mask, 'maturing_current_month'].sum()
-                        if pd.isna(accepted_mtd_value): # Handle cases where sum results in NaN (e.g., all values are NaN)
-                            accepted_mtd_value = 0.0
-                    elif not filtered_df.empty and 'status' in filtered_df.columns and 'maturity_date' in filtered_df.columns and 'value_sar' in filtered_df.columns:
-                        # Fallback to original calculation if 'maturing_current_month' is not present
-                        now = pd.Timestamp.now()
-                        start_month = now.replace(day=1)
-                        end_month = (start_month + pd.offsets.MonthEnd(1))
-                        maturity_series = pd.to_datetime(filtered_df['maturity_date'], errors='coerce')
-                        try:
-                            maturity_series = maturity_series.dt.tz_localize(None)
-                        except Exception:
-                            try:
-                                maturity_series = maturity_series.dt.tz_convert(None)
-                            except Exception:
-                                pass
-                        mask = (filtered_df['status'] == 'ACCEPTED') & \
-                               (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
-                        accepted_mtd_value = filtered_df.loc[mask, 'value_sar'].sum()
-                        if pd.isna(accepted_mtd_value): # Handle cases where sum results in NaN
-                            accepted_mtd_value = 0.0
+st.markdown("---")
 
+# Total Value (for the rows shown in this tab)
+total_value = filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0
 
-                    m1, m2 = st.columns(2)
-                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+# Accepted due this month (prefer 'maturing_current_month' when present)
+accepted_mtd_value = 0.0
+if not filtered_df.empty and 'status' in filtered_df.columns and 'maturing_current_month' in filtered_df.columns:
+    mask_acc = filtered_df['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
+    accepted_mtd_value = filtered_df.loc[mask_acc, 'maturing_current_month'].sum()
+    if pd.isna(accepted_mtd_value):
+        accepted_mtd_value = 0.0
+elif not filtered_df.empty and {'status','maturity_date','value_sar'}.issubset(filtered_df.columns):
+    now = pd.Timestamp.now()
+    start_month = now.replace(day=1)
+    end_month = (start_month + pd.offsets.MonthEnd(1))
+    maturity_series = pd.to_datetime(filtered_df['maturity_date'], errors='coerce')
+    try:
+        maturity_series = maturity_series.dt.tz_localize(None)
+    except Exception:
+        try:
+            maturity_series = maturity_series.dt.tz_convert(None)
+        except Exception:
+            pass
+    mask_acc = (filtered_df['status'].astype(str).str.upper() == 'ACCEPTED') & \
+               (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
+    accepted_mtd_value = filtered_df.loc[mask_acc, 'value_sar'].sum()
+    if pd.isna(accepted_mtd_value):
+        accepted_mtd_value = 0.0
 
-                    # Summary by Branch
-                    st.markdown("#### Summary by Branch")
-                    if not filtered_df.empty and {'branch','value_sar'}.issubset(filtered_df.columns):
-                        summary_by_branch = (
-                            filtered_df.groupby('branch', as_index=False)
-                                       .agg(
-                                           LCs=('value_sar', 'size'),
-                                           Total_Value_SAR=('value_sar', 'sum'),
-                                       )
-                                       .rename(columns={
-                                           'branch': 'Branch',
-                                           'Total_Value_SAR': 'Total Value (SAR)',
-                                       })
-                                       .sort_values('Total Value (SAR)', ascending=False)
-                        )
-                        st.dataframe(
-                            style_right(summary_by_branch, num_cols=['LCs', 'Total Value (SAR)']),
-                            use_container_width=True,
-                            height=300
-                        )
-                    else:
-                        st.info("No records to summarize for the selected filters.")
+# New KPIs for ALL tab: Collected and Remaining
+collected_sum = 0.0
+if {'status','value_sar'}.issubset(filtered_df.columns):
+    collected_sum = float(
+        filtered_df.loc[
+            filtered_df['status'].astype(str).str.strip().str.upper() == 'COLLECTED',
+            'value_sar'
+        ].sum()
+    )
+remaining_sum = float(total_value - collected_sum)
+
+if status_key == "ALL":
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+    m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
+    m4.metric("Remaining (SAR)", fmt_number_only(remaining_sum))
+else:
+    # keep original two KPIs for non-ALL tabs
+    m1, m2 = st.columns(2)
+    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
 
                     # ---- Detailed View (table-only maturity date filters + clean 'None' + DD-MM-YYYY for Maturity) ----
                     st.markdown("#### Detailed View")
@@ -1979,6 +1973,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
