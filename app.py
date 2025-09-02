@@ -1379,6 +1379,25 @@ def main():
                     if status_label == "Pending":
                         with cc3: st.metric("Urgent (≤2 days)", len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
                         
+                        # Add urgency indicators for pending settlements
+                        viz = view_data.copy()
+                        viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
+                        viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
+                        rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
+                        viz = viz.rename(columns={k: v for k, v in rename.items() if k in viz.columns})
+                        cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Days Until Due", "Remark", "Description"]
+                        cols = [c for c in cols if c in viz.columns]
+                        show = viz[cols].sort_values("Settlement Date")
+                        
+                        def _highlight(row):
+                            if "Days Until Due" in row:
+                                if row["Days Until Due"] <= 2: return ['background-color: #fee2e2'] * len(row) # Red
+                                if row["Days Until Due"] <= 7: return ['background-color: #fef3c7'] * len(row) # Yellow
+                            return [''] * len(row)
+                        styled = style_right(show, num_cols=["Amount"]).apply(_highlight, axis=1)
+                        # Removed height=None here, Streamlit handles it with use_container_width
+                        st.dataframe(styled, use_container_width=True) 
+                        
                         # Urgency warnings for pending
                         urgent_settlements = view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=3)]
                         if not urgent_settlements.empty:
@@ -1428,7 +1447,7 @@ def main():
                                 display_part = display_data_urgent.head(max_display)
                                 
                                 # Use st.dataframe for better structured display
-                                st.dataframe(display_part, use_container_width=True, height=None) 
+                                st.dataframe(display_part, use_container_width=True) # Removed height=None as it caused the error
                                 
                                 if num_settlements > max_display:
                                     st.write(f"... and {num_settlements - max_display} more.")
