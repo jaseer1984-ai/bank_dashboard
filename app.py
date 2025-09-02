@@ -1495,8 +1495,7 @@ def main():
         with tab_released: render_payments_tab(df_pay_released, "Released", "released")
 
     # ---- Export LC tab ----
-   # ---- Export LC tab ----
-        with tab_export_lc:
+  with tab_export_lc:
     st.markdown('<span class="section-chip">🚢 Export LC Proceeds</span>', unsafe_allow_html=True)
     if df_export_lc.empty:
         st.info("No Export LC data found or the file is invalid. Please check the Google Sheet link and format.")
@@ -1533,7 +1532,6 @@ def main():
                 selected_advising_banks = advising_banks if adv_choice == "All" else [adv_choice]
             else:
                 selected_advising_banks = []
-
             # Maturity Date filters (replacing Submitted Date, keep rows with no maturity_date)
             mat_dates = df_export_lc["maturity_date"].dropna() if "maturity_date" in df_export_lc.columns else pd.Series([], dtype="datetime64[ns]")
             min_mat_default = (mat_dates.min().date() if not mat_dates.empty else (datetime.today().date().replace(day=1)))
@@ -1979,6 +1977,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
