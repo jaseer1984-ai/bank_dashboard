@@ -23,8 +23,7 @@
 #        and added robust parsing for 'MATURITY DATE (DT FORMAT)' column name from the Excel sheet.
 # - NEW: "Accepted Due this Month (SAR)" metric only shown in 'Accepted' tab of Export LC.
 # - NEW: All metric values in Settlements, Supplier Payments, and Export LC tabs are displayed as custom KPI cards.
-# - FIX: Reverted Plotly chart x-axis normalization in "Liquidity Trend Analysis" (Bank tab) to diagnose rendering issue,
-#        and added explicit error display for debugging.
+# - FIX: Resolved "module' object does not support the context manager protocol" Plotly error by calling .plotly_chart() on the column object.
 
 
 import io
@@ -692,7 +691,7 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'payment term (days)': 'payment_term_days',
             # Robustly map 'maturity date' and its variations, prioritize exact match from screenshot
             'maturity date (dt format)': 'maturity_date', # This is the exact name from your screenshot
-            'maturity date': 'maturity_date', # General form
+            'maturity date': 'maturity_date',
             'date of maturity': 'maturity_date',
             'due date': 'maturity_date',
             'lc maturity date': 'maturity_date',
@@ -989,7 +988,7 @@ def main():
                             pio.templates["brand"].layout.paper_bgcolor = "white"
                             pio.templates["brand"].layout.plot_bgcolor = "white"
                         fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=fm_m["date"].dt.normalize(), # Normalized here
+                        fig.add_trace(go.Scatter(x=fm_m["date"].dt.normalize(),
                                                  y=fm_m["total_liquidity"],
                                                  mode='lines+markers',
                                                  name="Liquidity"))
@@ -1182,7 +1181,7 @@ def main():
                 if not df_bal_view.empty:
                     st.markdown(f"<span class='section-chip'>Bank Balances</span>", unsafe_allow_html=True)
                     for _, row in df_bal_view.iterrows():
-                        col1, = st.columns(1) # Use a single column for each card in a list style
+                        col1, = st.columns(1) # Using columns to render KPI-like structure
                         render_main_kpi_card(col1, row['bank'], row['balance'], prefix="SAR ", decimals=0)
             elif view == "Mini Cards":
                 cols = st.columns(3)
@@ -1245,7 +1244,7 @@ def main():
                 c1, c2 = st.columns([3, 1])
                 with c1:
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df_fm["date"], # REVERTED: Removed .dt.normalize() for debugging
+                    fig.add_trace(go.Scatter(x=df_fm["date"],
                                                  y=df_fm["total_liquidity"],
                                                  mode='lines+markers',
                                                  line=dict(width=3), 
@@ -1254,7 +1253,7 @@ def main():
                                       xaxis_title="Date", yaxis_title="Liquidity (SAR)", height=400,
                                       margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
                     fig.update_xaxes(rangeslider_visible=False, rangeselector=None)
-                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    c1.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG) # FIX: Call .plotly_chart on the column object 'c1'
                 with c2:
                     st.markdown("### 📊 Liquidity Metrics")
                     render_main_kpi_card(st, "Current", latest_liquidity, prefix="SAR ", decimals=0)
@@ -1267,7 +1266,7 @@ def main():
                     st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
             except Exception as e: # Catch and log the specific exception
                 logger.error(f"Plotly chart in tab_bank failed: {e}")
-                st.error(f"❌ Plotly chart failed to render: {e}") # Show the actual error message
+                st.error(f"❌ Plotly chart in 'Liquidity Trend Analysis' failed to render. Showing basic chart. Error: {e}") # Show the actual error message
                 st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
         st.markdown("---")
