@@ -1618,7 +1618,7 @@ def main():
         st.write("")  # intentionally render nothing here
 
             # ---- Status tabs ----
-            tab_all, tab_pending, tab_accepted, tab_collected, tab_process = st.tabs(
+                tab_all, tab_pending, tab_accepted, tab_collected, tab_process = st.tabs(
                 ["ALL", "ACCEPTANCE PENDING", "ACCEPTED", "COLLECTED", "UNDER PROCESS"]
             )
 
@@ -2057,6 +2057,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
