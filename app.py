@@ -23,7 +23,8 @@
 #        and added robust parsing for 'MATURITY DATE (DT FORMAT)' column name from the Excel sheet.
 # - NEW: "Accepted Due this Month (SAR)" metric only shown in 'Accepted' tab of Export LC.
 # - NEW: All metric values in Settlements, Supplier Payments, and Export LC tabs are displayed as custom KPI cards.
-# - FIX: Corrected Plotly chart rendering issue in "Liquidity Trend Analysis" by normalizing datetime objects.
+# - FIX: Reverted Plotly chart x-axis normalization in "Liquidity Trend Analysis" (Bank tab) to diagnose rendering issue,
+#        and added explicit error display for debugging.
 
 
 import io
@@ -676,6 +677,8 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
                     break
 
         # Build rename map
+        # IMPORTANT: Keep original Excel column names (case-insensitive, stripped) as keys
+        # and standardized internal names as values.
         rename_map = {
             'applicant': 'applicant',
             'issuing bank': 'issuing_bank',
@@ -687,54 +690,45 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'submitted date': 'submitted_date',
             'value (sar)': 'value_sar',
             'payment term (days)': 'payment_term_days',
-            # Robustly map 'maturity date' and its variations, prioritize exact match
-            'maturity date (dt format)': 'maturity_date', # Specific to your new sheet column name
-            'maturity date': 'maturity_date',
+            # Robustly map 'maturity date' and its variations, prioritize exact match from screenshot
+            'maturity date (dt format)': 'maturity_date', # This is the exact name from your screenshot
+            'maturity date': 'maturity_date', # General form
             'date of maturity': 'maturity_date',
             'due date': 'maturity_date',
             'lc maturity date': 'maturity_date',
             'status': 'status',
             'remarks': 'remarks',
             'branch': 'branch',
-            'maturing current month': 'maturing_current_month' # New column added
+            'maturing current month': 'maturing_current_month' 
         }
         if lc_no_col:
             rename_map[lc_no_col] = 'lc_no'
             
-        # Apply rename map to DataFrame columns
-        # It's crucial to map the *exact* lowercased column names from the Excel file
-        # to the standardized names used in the code.
+        # Create a mapping from actual lowercase column names to standardized names
         actual_rename_map = {}
-        for old_col_variant, new_col_standard in rename_map.items():
-            if old_col_variant in d.columns: # Check if the lowercased variant exists
-                actual_rename_map[old_col_variant] = new_col_standard
-        
+        for original_excel_col, new_standard_col in rename_map.items():
+            if original_excel_col in d.columns: # Check if the lowercased version of the original col exists
+                actual_rename_map[original_excel_col] = new_standard_col
+            
         d = d.rename(columns=actual_rename_map)
 
         # Coerce datatypes
         if 'submitted_date' in d.columns:
             d['submitted_date'] = pd.to_datetime(d['submitted_date'], errors='coerce')
         if 'maturity_date' in d.columns:
-            # Ensure 'maturity_date' column exists before trying to convert
             d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
         if 'value_sar' in d.columns:
             d['value_sar'] = d['value_sar'].apply(_to_number)
-        # Convert new maturing_current_month column to numeric
         if 'maturing_current_month' in d.columns:
             d['maturing_current_month'] = d['maturing_current_month'].apply(_to_number)
 
 
-        # Clean/standardize
-        if 'branch' in d.columns:
-            d['branch'] = d['branch'].astype(str).str.strip().str.upper()
-        if 'issuing_bank' in d.columns:
-            d['issuing_bank'] = d['issuing_bank'].astype(str).str.strip().str.upper()
-        if 'advising_bank' in d.columns:
-            d['advising_bank'] = d['advising_bank'].astype(str).str.strip().str.upper()
-        if 'status' in d.columns:
-            d['status'] = d['status'].astype(str).str.strip().str.upper()
+        # Clean/standardize other string columns
+        for col_name in ['branch', 'issuing_bank', 'advising_bank', 'status']:
+            if col_name in d.columns:
+                d[col_name] = d[col_name].astype(str).str.strip().str.upper()
 
-        # Keep rows with a valid value and branch; allow missing submitted_date/maturity_date
+        # Keep rows with a valid value and branch (these are core requirements for LC items)
         required = [col for col in ['value_sar', 'branch'] if col in d.columns]
         out = d.dropna(subset=required)
         return out
@@ -1188,7 +1182,7 @@ def main():
                 if not df_bal_view.empty:
                     st.markdown(f"<span class='section-chip'>Bank Balances</span>", unsafe_allow_html=True)
                     for _, row in df_bal_view.iterrows():
-                        col1, col2 = st.columns([1,1]) # Using columns to render KPI-like structure
+                        col1, = st.columns(1) # Use a single column for each card in a list style
                         render_main_kpi_card(col1, row['bank'], row['balance'], prefix="SAR ", decimals=0)
             elif view == "Mini Cards":
                 cols = st.columns(3)
@@ -1251,7 +1245,7 @@ def main():
                 c1, c2 = st.columns([3, 1])
                 with c1:
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df_fm["date"].dt.normalize(), # FIX: Normalized date for Plotly
+                    fig.add_trace(go.Scatter(x=df_fm["date"], # REVERTED: Removed .dt.normalize() for debugging
                                                  y=df_fm["total_liquidity"],
                                                  mode='lines+markers',
                                                  line=dict(width=3), 
@@ -1273,7 +1267,7 @@ def main():
                     st.write(f"**Avg:** {fmt_number_only(last30['total_liquidity'].mean())}")
             except Exception as e: # Catch and log the specific exception
                 logger.error(f"Plotly chart in tab_bank failed: {e}")
-                st.error("❌ Unable to display liquidity trend analysis")
+                st.error(f"❌ Plotly chart failed to render: {e}") # Show the actual error message
                 st.line_chart(df_fm.set_index("date")["total_liquidity"])
 
         st.markdown("---")
@@ -1511,7 +1505,7 @@ def main():
                     if not bank_totals.empty:
                         st.markdown(f"<span class='section-chip'>{status_label} Payments by Bank</span>", unsafe_allow_html=True)
                         for _, row in bank_totals.iterrows():
-                            col1, col2 = st.columns([1,1]) # Using columns to render KPI-like structure
+                            col1, = st.columns(1) # Using columns to render KPI-like structure
                             render_main_kpi_card(col1, row['bank'], row['balance'], prefix="SAR ", decimals=0)
                 else: # Progress Bars
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
