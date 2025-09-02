@@ -1,6 +1,26 @@
 # -*- coding: utf-8 -*-
 # app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab, Export LC Tab)
-# (Same as your original file, with checkbox_multiselect helper added and Export LC filters updated)
+# - "Remaining in Month" shows Balance Due from Settlements sheet
+# - Comma-separated numeric formatting (with decimals where needed)
+# - Plotly toolbars hidden
+# - Colored tabs via CSS (no Streamlit tab code changes needed)
+# - Exchange Rates functionality restored
+# - Added "Paid" value in LCR & STL Settlements overview
+# - Added "Reports" tab for complete Excel export
+# - Added "Export LC" tab with data from a new Excel source, including branch and date filters.
+# - Sidebar cleaned up (Controls/Theme hidden) and new "Accepted Export LC" KPI added.
+# - "Export LC" tab moved after "Supplier Payments" and a "Status" filter added.
+# - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
+# - Fixed bug where tab focus jumped on filter change by adding stable keys.
+# - UPDATE: Export LC tab now shows L/C No in table, uses Advising Bank instead of Issuing Bank in table,
+#           Status moved to tabs, and added Issuing Bank filter. Parsing of L/C No made robust.
+# - CHANGE: Export LC tab top-level date filters now use Maturity Date (not Submitted Date).
+# - CHANGE: Export LC Detailed View removes 'None'/NaT, adds table-only Maturity Date filters, and formats Maturity Date as DD-MM-YYYY.
+# - UPDATE: Removed auto refresh.
+# - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
+# - UPDATE: Export LC Detailed View table now displays 'Maturity Date' (formatted DD-MM-YYYY) and excludes 'Submitted Date'.
+# - FIX: Ensured 'Maturity Date' column is explicitly included and correctly formatted in Export LC Detailed View,
+#        and added robust parsing for 'MATURITY DATE (DT FORMAT)' column name from the Excel sheet.
 
 import io
 import time
@@ -271,67 +291,6 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
                               ("font-family", "var(--app-font)")]
                 }]))
     return styler
-
-# ----------------------------
-# Checkbox-multiselect Helper (NEW)
-# ----------------------------
-def _sanitize_key(s: str) -> str:
-    return re.sub(r'[^0-9a-zA-Z]+', '_', str(s).strip()).lower()
-
-def checkbox_multiselect(options: list, key_prefix: str, cols: int = 4, default_all: bool = True):
-    """
-    Render a grid of checkboxes with a top 'ALL' checkbox.
-    Returns: list of selected options (strings).
-    Keys are stable (based on key_prefix + sanitized option), avoiding tab-jump issues.
-    """
-    if not options:
-        return []
-
-    # Ensure options is a list of strings
-    options = [str(o) for o in list(options)]
-
-    select_all_key = f"{key_prefix}_select_all"
-    if select_all_key not in st.session_state:
-        st.session_state[select_all_key] = default_all
-
-    sanitized = [(opt, _sanitize_key(opt)) for opt in options]
-
-    # initialize per-option session_state (respect default_all on first run)
-    for opt, safe in sanitized:
-        k = f"{key_prefix}_{safe}"
-        if k not in st.session_state:
-            st.session_state[k] = default_all
-
-    # Render 'ALL' checkbox on the left
-    left, right = st.columns([1, 7])
-    with left:
-        select_all = st.checkbox("ALL", value=st.session_state.get(select_all_key, default_all), key=select_all_key)
-    with right:
-        st.caption("")  # keeps layout tidy (you can put help text here)
-
-    # If user checks ALL, set each option's key to True so checkboxes show checked
-    if select_all:
-        for opt, safe in sanitized:
-            st.session_state[f"{key_prefix}_{safe}"] = True
-
-    # Render options in a grid
-    ncols = min(cols, max(1, len(options)))
-    col_layout = st.columns(ncols)
-    selected = []
-    for i, (opt, safe) in enumerate(sanitized):
-        c = col_layout[i % ncols]
-        k = f"{key_prefix}_{safe}"
-        # Use stored session_state to keep checkbox stable
-        checked = c.checkbox(opt, value=st.session_state.get(k, False), key=k)
-        if checked:
-            selected.append(opt)
-
-    # Keep the 'ALL' checkbox in sync (if user manually checks all boxes)
-    all_checked = (len(selected) == len(options))
-    if st.session_state.get(select_all_key) != all_checked:
-        st.session_state[select_all_key] = all_checked
-
-    return selected
 
 # ----------------------------
 # Cached Data Fetching
@@ -608,7 +567,7 @@ def parse_settlements(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
             "settlement_date": pd.to_datetime(d[date_col], errors="coerce"),
             "amount": d[amount_col].map(_to_number),
             "status": d[status_col].astype(str).str.strip() if status_col else None,
-            "type": d[type_col].astype(str).upper().str.strip() if type_col else "",
+            "type": d[type_col].astype(str).str.upper().str.strip() if type_col else "",
             "remark": d[remark_col].astype(str).str.strip() if remark_col else "",
             "description": ""
         })
@@ -1320,6 +1279,8 @@ def main():
                     pio.templates["brand"] = pio.templates["plotly_white"]
                     pio.templates["brand"].layout.colorway = [THEME["accent1"], THEME["accent2"], "#64748b", "#94a3b8"]
                     pio.templates["brand"].layout.font.family = APP_FONT
+                    pio.templates["brand"].layout.paper_bgcolor = "white"
+                    pio.templates["brand"].layout.plot_bgcolor = "white"
                 latest_liquidity = df_fm.iloc[-1]["total_liquidity"]
                 if len(df_fm) > 1:
                     prev = df_fm.iloc[-2]["total_liquidity"]
@@ -1543,12 +1504,11 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 branches = sorted(df_export_lc["branch"].dropna().astype(str).unique())
-                # Use checkbox grid with ALL toggle (helper)
-                selected_branches = checkbox_multiselect(list(branches), key_prefix="export_lc_branch", cols=4, default_all=True)
+                selected_branches = st.multiselect("Filter by Branch", options=branches, default=branches, key="export_lc_branch_filter")
             with col2:
                 advising_banks = sorted(df_export_lc["advising_bank"].dropna().astype(str).unique()) if "advising_bank" in df_export_lc.columns else []
                 if advising_banks:
-                    selected_advising_banks = checkbox_multiselect(list(advising_banks), key_prefix="export_lc_advising", cols=4, default_all=True)
+                    selected_advising_banks = st.multiselect("Filter by Advising Bank", options=advising_banks, default=advising_banks, key="export_lc_advising_filter")
                 else:
                     selected_advising_banks = []
 
@@ -1563,12 +1523,7 @@ def main():
                 end_maturity_filter = st.date_input("To Maturity Date", value=max_mat_default, key="export_lc_maturity_end")
 
             # Apply branch + advising bank filters first
-            if selected_branches:
-                filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
-            else:
-                # if nothing selected, keep all (mirrors default behaviour of multiselect when default is all)
-                filtered_df_base = df_export_lc.copy()
-
+            filtered_df_base = df_export_lc[df_export_lc["branch"].isin(selected_branches)].copy()
             if selected_advising_banks and "advising_bank" in filtered_df_base.columns:
                 filtered_df_base = filtered_df_base[filtered_df_base["advising_bank"].isin(selected_advising_banks)]
 
