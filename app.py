@@ -98,27 +98,6 @@ def set_app_font(family: str = APP_FONT):
       .stDataFrame, .stDataFrame * {{ font-variant-numeric: tabular-nums; }}
       /* Do NOT hide the toolbar—this holds the sidebar toggle */
       /* [data-testid="stToolbar"] {{ display: none !important; }} */
-      
-      /* Ensure sidebar toggle button is visible and prominent */
-      [data-testid="stToolbar"] {{
-        visibility: visible !important;
-        opacity: 1 !important;
-      }}
-      
-      /* Make the sidebar toggle button more visible */
-      [data-testid="stToolbar"] > button[kind="header"] {{
-        visibility: visible !important;
-        opacity: 1 !important;
-        background-color: rgba(255, 255, 255, 0.8) !important;
-        border: 1px solid #e0e0e0 !important;
-        border-radius: 4px !important;
-      }}
-      
-      /* Ensure the hamburger icon is visible */
-      [data-testid="stToolbar"] svg {{
-        visibility: visible !important;
-        opacity: 1 !important;
-      }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -1895,4 +1874,86 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     if "currency_pair" in df_fx.columns:
-                        available_pairs = ["All"] + sorted(df_fx["
+                        available_pairs = ["All"] + sorted(df_fx["currency_pair"].unique())
+                        selected_pair = st.selectbox("Filter by Currency Pair", available_pairs, key="fx_table_pair")
+                with col2:
+                    if "date" in df_fx.columns:
+                        date_range = st.number_input("Last N days", min_value=1, max_value=365, value=30, key="fx_date_range")
+                display_data = df_fx.copy()
+                if "date" in display_data.columns:
+                    cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=date_range)
+                    display_data = display_data[display_data["date"] >= cutoff_date]
+                if selected_pair != "All":
+                    display_data = display_data[display_data["currency_pair"] == selected_pair]
+                if not display_data.empty:
+                    table_data = display_data.copy()
+                    if "date" in table_data.columns:
+                        table_data["Date"] = table_data["date"].dt.strftime(config.DATE_FMT)
+                    rename_map = {
+                        "currency_pair": "Currency Pair",
+                        "rate": "Rate",
+                        "change": "Change",
+                        "change_pct": "Change %"
+                    }
+                    table_data = table_data.rename(columns={k: v for k, v in rename_map.items() if k in table_data.columns})
+                    display_cols = ["Currency Pair", "Rate"]
+                    if "Date" in table_data.columns:
+                        display_cols.append("Date")
+                    if "Change" in table_data.columns:
+                        display_cols.append("Change")
+                    if "Change %" in table_data.columns:
+                        display_cols.append("Change %")
+                    display_cols = [col for col in display_cols if col in table_data.columns]
+                    table_show = table_data[display_cols].sort_values("Date" if "Date" in display_cols else "Currency Pair", ascending=False)
+                    num_cols = [col for col in ["Rate", "Change", "Change %"] if col in table_show.columns]
+                    styled_table = style_right(table_show, num_cols=num_cols, decimals=4)
+                    if "Change %" in table_show.columns:
+                        def highlight_changes(val):
+                            try:
+                                if pd.isna(val):
+                                    return ''
+                                num_val = float(val)
+                                if num_val > 0:
+                                    return 'color: #059669; font-weight: 600;'
+                                elif num_val < 0:
+                                    return 'color: #dc2626; font-weight: 600;'
+                                else:
+                                    return ''
+                            except:
+                                return ''
+                        styled_table = styled_table.applymap(highlight_changes, subset=["Change %"])
+                    st.dataframe(styled_table, use_container_width=True, height=500)
+                else:
+                    st.info("No data available for the selected criteria.")
+
+    # ---- Facility Report tab ----
+    with tab_facility:
+        # Intentionally no placeholder text (per preference)
+        pass
+
+    # ---- Reports tab ----
+    with tab_reports:
+        st.markdown('<span class="section-chip">📊 Complete Report Export</span>', unsafe_allow_html=True)
+        st.info("Download a complete Excel report containing all dashboard data across multiple sheets.")
+        excel_data = generate_complete_report(
+            df_by_bank, df_pay_approved, df_pay_released, df_lc, df_lc_paid, 
+            df_fm, df_cvp, df_fx, df_export_lc, 
+            total_balance, approved_sum, lc_next4_sum, banks_cnt
+        )
+        st.download_button(
+            label="📥 Download Complete Treasury Report.xlsx",
+            data=excel_data,
+            file_name=f"Treasury_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary"
+        )
+
+    st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
+
+    # Removed the auto refresh block as requested.
+
+if __name__ == "__main__":
+    set_app_font() # Ensure font is set at the start
+    main()
