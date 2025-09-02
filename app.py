@@ -28,6 +28,7 @@
 # - FIX: Improved robustness of render_main_kpi_card to avoid displaying "N/A" for main value when only delta is present,
 #        and fixed stray '</div>' tags in delta HTML rendering.
 # - FIX: Corrected AttributeError for config.RATE_LIMIT_CPM to config.RATE_LIMIT_CALLS_PER_MINUTE.
+# - FIX: Addressed "LAST UPDATE N/A" in FX tab and '</div>' tags in KPI cards by refining render_main_kpi_card.
 
 
 import io
@@ -66,7 +67,7 @@ class Config:
     DATE_FMT: str = "%Y-%m-%d"
     REQUEST_TIMEOUT: int = int(os.getenv('REQUEST_TIMEOUT', '30'))
     MAX_FILE_SIZE_MB: int = int(os.getenv('MAX_FILE_SIZE_MB', '50'))
-    RATE_LIMIT_CALLS_PER_MINUTE: int = int(os.getenv('RATE_LIMIT_CPM', '12')) # Corrected attribute name
+    RATE_LIMIT_CALLS_PER_MINUTE: int = int(os.getenv('RATE_LIMIT_CPM', '12')) 
 
 config = Config()
 
@@ -223,7 +224,7 @@ LINKS = {
 # ----------------------------
 # Rate-limit decorator
 # ----------------------------
-def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE): # FIX: Corrected attribute name
+def rate_limit(calls_per_minute: int = config.RATE_LIMIT_CALLS_PER_MINUTE): 
     def decorator(func):
         last_called: Dict[str, float] = {}
         @wraps(func)
@@ -266,10 +267,10 @@ def fmt_currency(v, currency="SAR") -> str:
     except Exception:
         return str(v)
 
-def fmt_number(v, decimals: int = 0) -> str:
+def fmt_number(v, decimals: int = 0, suffix: str = "") -> str:
     try:
         if pd.isna(v): return "N/A"
-        return f"{float(v):,.{decimals}f}"
+        return f"{float(v):,.{decimals}f}{suffix}"
     except Exception:
         return str(v)
 
@@ -301,54 +302,44 @@ def style_right(df: pd.DataFrame, num_cols=None, decimals=0) -> Styler:
     return styler
 
 # ----------------------------
-# Custom KPI Card Renderer
+# Custom KPI Card Renderer (Refactored for robustness)
 # ----------------------------
-def render_main_kpi_card(col_container, title, value, prefix="SAR ", decimals=0, delta=None):
-    # Ensure value is numeric for formatting, even if it might be string for delta
-    display_value = value if isinstance(value, (int, float)) else np.nan
-    value_str = fmt_number(display_value, decimals=decimals)
-    
-    delta_html = ""
-    if delta is not None:
-        delta_text_to_use = ""
-        delta_color = "#0f172a" # Default neutral color
+def render_main_kpi_card(col_container, title, main_value_display_text, delta_display_text=None):
+    # main_value_display_text should already be a formatted string (e.g., "SAR 1,234,567", "N/A", "Aug 31, 2025", "4")
+    # delta_display_text should already be a formatted string (e.g., "+49.1%", "▲ 100") or None/empty string
+
+    delta_html_content = ""
+    if delta_display_text is not None and delta_display_text.strip() != "" and delta_display_text.strip().lower() != "n/a":
+        delta_color = "#0f172a" 
+        # Check if delta string starts with +/- for color, otherwise neutral
+        if re.match(r'^[+-]', delta_display_text.strip()): 
+            delta_color = "#059669" if delta_display_text.strip().startswith('+') else "#dc2626"
         
-        if isinstance(delta, (int, float)):
-            delta_color = "#059669" if delta >= 0 else "#dc2626"
-            delta_symbol = "▲" if delta >= 0 else "▼"
-            delta_text_to_use = f"{delta_symbol} {delta:,.0f}"
-        elif isinstance(delta, str) and delta.strip() != "" and delta.strip().lower() != "n/a":
-            # Assume delta is a pre-formatted string (e.g., "+49.1%")
-            delta_text_to_use = delta
-            if re.match(r'^[+-]', delta.strip()): # Check if it starts with + or -
-                delta_color = "#059669" if delta.strip().startswith('+') else "#dc2626"
-        
-        if delta_text_to_use: # Only render the delta div if there's actual text for it
-            delta_html = f"""
-            <div style="font-size:12px; font-weight:600; color:{delta_color}; margin-top:4px;">
-                {delta_text_to_use}
-            </div>
-            """
+        delta_html_content = f"""
+        <div style="font-size:12px; font-weight:600; color:{delta_color}; margin-top:4px;">
+            {delta_display_text}
+        </div>
+        """
     
     card_bg = THEME["heading_bg"]
     border_color = THEME["accent1"] 
     
-    with col_container: # This 'with' block expects 'col_container' to be a Streamlit column object
-        st.markdown(
-            f"""
-            <div class="dash-card" style="background:{card_bg}; padding:18px; border-radius:12px; 
-                 border-left:4px solid {border_color}; margin-bottom:16px; box-shadow:0 2px 8px rgba(0,0,0,.05);">
-                <div style="font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;">
-                    {title}
-                </div>
-                <div style="font-size:24px; font-weight:800; color:#0f172a; text-align:right;">
-                    {prefix}{value_str if pd.notna(display_value) else ('N/A' if not delta_html else '')}
-                </div>
-                {delta_html}
+    # FIX: Directly call markdown on the passed column object
+    col_container.markdown(
+        f"""
+        <div class="dash-card" style="background:{card_bg}; padding:18px; border-radius:12px; 
+             border-left:4px solid {border_color}; margin-bottom:16px; box-shadow:0 2px 8px rgba(0,0,0,.05);">
+            <div style="font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;">
+                {title}
             </div>
-            """,
-            unsafe_allow_html=True
-        )
+            <div style="font-size:24px; font-weight:800; color:#0f172a; text-align:right;">
+                {main_value_display_text}
+            </div>
+            {delta_html_content}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 # ----------------------------
 # Cached Data Fetching
@@ -1009,10 +1000,11 @@ def main():
                         st.line_chart(fm_m.set_index("date")["total_liquidity"])
 
                     kpi_a, kpi_b, kpi_c, kpi_d = st.columns(4)
-                    render_main_kpi_card(kpi_a, "Opening (MTD)", opening)
-                    render_main_kpi_card(kpi_b, "Current", latest, delta=f"{mtd_change:,.0f} ({mtd_change_pct:.1f}%)" if pd.notna(mtd_change_pct) else None)
-                    render_main_kpi_card(kpi_c, "Avg Daily Δ", avg_daily)
-                    render_main_kpi_card(kpi_d, "Proj. EOM", latest + (avg_daily or 0))
+                    render_main_kpi_card(kpi_a, "Opening (MTD)", fmt_currency(opening))
+                    render_main_kpi_card(kpi_b, "Current", fmt_currency(latest), 
+                                         delta_display_text=f"{mtd_change:,.0f} ({mtd_change_pct:.1f}%)" if pd.notna(mtd_change_pct) else None)
+                    render_main_kpi_card(kpi_c, "Avg Daily Δ", fmt_currency(avg_daily))
+                    render_main_kpi_card(kpi_d, "Proj. EOM", fmt_currency(latest + (avg_daily or 0)))
                 else:
                     st.info("No rows in Fund Movement for the current month.")
         with c2:
@@ -1067,10 +1059,10 @@ def main():
                 completion_rate = (paid_amount / total_due * 100) if total_due > 0 else 0
 
                 col1, col2, col3, col4 = st.columns(4)
-                render_main_kpi_card(col1, "Total Due", total_due)
-                render_main_kpi_card(col2, "Current Due", current_due)
-                render_main_kpi_card(col3, "Paid", paid_amount)
-                render_main_kpi_card(col4, "Balance Due", balance_due)
+                render_main_kpi_card(col1, "Total Due", fmt_currency(total_due))
+                render_main_kpi_card(col2, "Current Due", fmt_currency(current_due))
+                render_main_kpi_card(col3, "Paid", fmt_currency(paid_amount))
+                render_main_kpi_card(col4, "Balance Due", fmt_currency(balance_due))
             except Exception as e:
                 st.error(f"Unable to render Settlements section: {e}")
 
@@ -1079,7 +1071,7 @@ def main():
         # 3) FX MTD section restored
         if st.session_state.get("show_fx", True) and not df_fx.empty:
             st.subheader("Exchange Rates — Month Overview")
-            fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy() # Fixed typo: df_fm to df_fx
+            fx_m = df_fx[(df_fx["date"] >= month_start) & (df_fx["date"] <= month_end)].copy()
             if not fx_m.empty:
                 f1, f2 = st.columns(2)
                 with f1:
@@ -1190,14 +1182,13 @@ def main():
                 if not df_bal_view.empty:
                     st.markdown(f"<span class='section-chip'>Bank Balances</span>", unsafe_allow_html=True)
                     for _, row in df_bal_view.iterrows():
-                        col1, = st.columns(1) # Using columns to render KPI-like structure
-                        render_main_kpi_card(col1, row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                        col1, = st.columns(1) 
+                        render_main_kpi_card(col1, row['bank'], fmt_currency(row['balance']))
             elif view == "Mini Cards":
                 cols = st.columns(3)
                 for i, row in df_bal_view.iterrows():
-                    render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                    render_main_kpi_card(cols[i % 3], row['bank'], fmt_currency(row['balance']))
             elif view == "Progress Bars":
-                # This display type is inherently different, so it's kept as is.
                 max_amount = df_bal_view["balance"].max()
                 for _, row in df_bal_view.iterrows():
                     percentage = (row["balance"] / max_amount) * 100 if max_amount > 0 else 0
@@ -1219,7 +1210,7 @@ def main():
                 cols = st.columns(min(4, len(df_bal_view)))
                 for i, row in df_bal_view.iterrows():
                     if i < 4:
-                        render_main_kpi_card(cols[i], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                        render_main_kpi_card(cols[i], row['bank'], fmt_currency(row['balance']))
             else: # Table View
                 table = df_bal_view.copy()
                 rename_map = {"bank": "Bank", "balance": "Balance"}
@@ -1234,25 +1225,29 @@ def main():
         if df_fm.empty:
             st.info("No liquidity data available.")
         else:
-            # Replaced problematic Plotly chart with direct st.line_chart
             c1, c2 = st.columns([3, 1])
             with c1:
-                st.line_chart(df_fm.set_index("date")["total_liquidity"], use_container_width=True) 
+                if not df_fm.empty: # Only display chart if data exists
+                    st.line_chart(df_fm.set_index("date")["total_liquidity"], use_container_width=True) 
+                else:
+                    st.info("No liquidity data to display chart.")
             with c2:
                 st.markdown("### 📊 Liquidity Metrics")
                 latest_liquidity = df_fm.iloc[-1]["total_liquidity"] if not df_fm.empty else np.nan
-                render_main_kpi_card(c2, "Current", latest_liquidity, prefix="SAR ", decimals=0) # FIX: Pass c2
+                render_main_kpi_card(c2, "Current", fmt_currency(latest_liquidity)) 
                 
-                # Calculate trend_text for KPI card
-                trend_text = "N/A"
-                if len(df_fm) > 1:
+                trend_display_text = "N/A"
+                if len(df_fm) > 1 and pd.notna(latest_liquidity):
                     prev = df_fm.iloc[-2]["total_liquidity"]
-                    trend_change = latest_liquidity - prev
-                    trend_pct = (trend_change / prev) * 100 if prev != 0 else 0
-                    trend_text = f"{'+' if trend_pct >= 0 else ''}{trend_pct:.1f}%" # Format for delta
+                    if pd.notna(prev) and prev != 0:
+                        trend_change = latest_liquidity - prev
+                        trend_pct = (trend_change / prev) * 100
+                        trend_display_text = f"{'+' if trend_pct >= 0 else ''}{trend_pct:.1f}%"
+                    else:
+                        trend_display_text = "N/A (Prev. zero/missing)"
                 
                 # Render Trend card, only showing delta if meaningful
-                render_main_kpi_card(c2, "Trend", None, prefix="", decimals=0, delta=trend_text if trend_text != "N/A" else None) # FIX: Pass c2, value=None
+                render_main_kpi_card(c2, "Trend", "", delta_display_text=trend_display_text if trend_display_text != "N/A" else None)
                 st.markdown("**Statistics (30d)**")
                 last30 = df_fm.tail(30)
                 st.write(f"**Max:** {fmt_number_only(last30['total_liquidity'].max())}")
@@ -1295,7 +1290,7 @@ def main():
             else: # Cards
                 cols = st.columns(3)
                 for i, row in cvp_sorted.iterrows():
-                    render_main_kpi_card(cols[i % 3], row['branch'], row['net'], prefix="SAR ", decimals=0)
+                    render_main_kpi_card(cols[i % 3], row['branch'], fmt_currency(row['net']))
 
     # ---- Settlements tab ----
     with tab_settlements:
@@ -1321,12 +1316,12 @@ def main():
                 
                 if settlement_view == "Summary + Table":
                     cc1, cc2, cc3 = st.columns(3)
-                    render_main_kpi_card(cc1, f"Total {status_label} Amount", view_data["amount"].sum(), prefix="SAR ", decimals=0)
-                    render_main_kpi_card(cc2, f"Number of {status_label}", len(view_data), prefix="", decimals=0)
+                    render_main_kpi_card(cc1, f"Total {status_label} Amount", fmt_currency(view_data["amount"].sum()))
+                    render_main_kpi_card(cc2, f"Number of {status_label}", fmt_number_only(len(view_data)), prefix="")
                     
                     if status_label == "Pending":
                         urgent_count = len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)])
-                        render_main_kpi_card(cc3, "Urgent (2 days)", urgent_count, prefix="", decimals=0)
+                        render_main_kpi_card(cc3, "Urgent (2 days)", fmt_number_only(urgent_count), prefix="")
                         
                         # Add urgency indicators for pending settlements
                         viz = view_data.copy()
@@ -1373,7 +1368,6 @@ def main():
                     st.markdown("**📊 LCR & STL Settlements by Urgency**")
                     if not urgent.empty:
                         st.markdown("**🚨 Urgent (≤2 days)**")
-                        # Using raw progress bars here, as they are not simple metrics
                         max_amount_urgent = urgent["amount"].sum()
                         for _, row in urgent.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount":"balance"}).iterrows():
                             percentage = (row["balance"] / max_amount_urgent) * 100 if max_amount_urgent > 0 else 0
@@ -1432,17 +1426,16 @@ def main():
                 
                 elif settlement_view == "Progress by Urgency" and status_label == "Paid":
                     st.info("Progress by urgency view is only available for pending settlements.")
-                    # Show bank summary for paid
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                     cols = st.columns(3)
                     for i, row in bank_totals.iterrows():
-                        render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                        render_main_kpi_card(cols[i % 3], row['bank'], fmt_currency(row['balance']))
                 
                 else:  # Mini Cards
                     cards = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                     cols = st.columns(3)
                     for i, row in cards.iterrows():
-                        render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                        render_main_kpi_card(cols[i % 3], row['bank'], fmt_currency(row['balance']))
             else:
                 st.info("No settlements match the selected criteria.")
         
@@ -1471,9 +1464,9 @@ def main():
                                         index=0, horizontal=True, key=f"payment_view_{key_suffix}")
                 if payment_view == "Summary + Table":
                     c1, c2, c3 = st.columns(3)
-                    render_main_kpi_card(c1, f"Total {status_label} Amount", view_data["amount"].sum(), prefix="SAR ", decimals=0)
-                    render_main_kpi_card(c2, "Number of Payments", len(view_data), prefix="", decimals=0)
-                    render_main_kpi_card(c3, "Average Payment", view_data["amount"].mean(), prefix="SAR ", decimals=0)
+                    render_main_kpi_card(c1, f"Total {status_label} Amount", fmt_currency(view_data["amount"].sum()))
+                    render_main_kpi_card(c2, "Number of Payments", fmt_number_only(len(view_data)), prefix="")
+                    render_main_kpi_card(c3, "Average Payment", fmt_currency(view_data["amount"].mean()))
                     
                     grp = (view_data.groupby("bank", as_index=False)["amount"]
                            .sum().sort_values("amount", ascending=False)
@@ -1489,17 +1482,16 @@ def main():
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                     cols = st.columns(3)
                     for i, row in bank_totals.iterrows():
-                        render_main_kpi_card(cols[i % 3], row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                        render_main_kpi_card(cols[i % 3], row['bank'], fmt_currency(row['balance']))
                 elif payment_view == "List":
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
                     if not bank_totals.empty:
                         st.markdown(f"<span class='section-chip'>{status_label} Payments by Bank</span>", unsafe_allow_html=True)
                         for _, row in bank_totals.iterrows():
-                            col1, = st.columns(1) # Using columns to render KPI-like structure
-                            render_main_kpi_card(col1, row['bank'], row['balance'], prefix="SAR ", decimals=0)
+                            col1, = st.columns(1) 
+                            render_main_kpi_card(col1, row['bank'], fmt_currency(row['balance']))
                 else: # Progress Bars
                     bank_totals = view_data.groupby("bank", as_index=False)["amount"].sum().rename(columns={"amount": "balance"})
-                    # This display type is inherently different, so it's kept as is.
                     max_amount_total = bank_totals["balance"].max()
                     for _, row in bank_totals.iterrows():
                         percentage = (row["balance"] / max_amount_total) * 100 if max_amount_total > 0 else 0
@@ -1620,11 +1612,11 @@ def main():
                             accepted_mtd_value = 0.0
 
                     m1, m2 = st.columns(2)
-                    render_main_kpi_card(m1, "Total Value (SAR)", total_value, prefix="SAR ", decimals=0)
+                    render_main_kpi_card(m1, "Total Value (SAR)", fmt_currency(total_value))
                     
                     # Conditional display of "Accepted Due this Month (SAR)"
                     if status_key == "ACCEPTED":
-                        render_main_kpi_card(m2, "Accepted Due this Month (SAR)", accepted_mtd_value, prefix="SAR ", decimals=0)
+                        render_main_kpi_card(m2, "Accepted Due this Month (SAR)", fmt_currency(accepted_mtd_value))
 
 
                     # Summary by Branch
@@ -1758,23 +1750,21 @@ def main():
                         render_main_kpi_card(
                             cols[int(i) % min(4, len(latest_fx))], # Pass the column object
                             row["currency_pair"],
-                            row["rate"],
-                            prefix="", # FX rates usually don't have a currency prefix on the number itself
-                            decimals=4,
-                            delta=change_info # Pass the pre-formatted string or None
+                            fmt_rate(row["rate"]), # Main value formatted as rate
+                            delta_display_text=change_info # Pass the pre-formatted string or None
                         )
                             
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
-                render_main_kpi_card(col1, "Currency Pairs", len(latest_fx), prefix="", decimals=0)
+                render_main_kpi_card(col1, "Currency Pairs", fmt_number_only(len(latest_fx)), prefix="")
+                
                 if "change_pct" in latest_fx.columns:
                     avg_change = latest_fx["change_pct"].mean()
-                    render_main_kpi_card(col2, "Avg Change %", avg_change, prefix="", decimals=2)
-                last_update = latest_fx["date"].max() if "date" in latest_fx.columns else None
-                if pd.notna(last_update):
-                    render_main_kpi_card(col3, "Last Update", last_update.strftime(config.DATE_FMT), prefix="", decimals=0)
-                else:
-                    render_main_kpi_card(col3, "Last Update", "N/A", prefix="", decimals=0)
+                    render_main_kpi_card(col2, "Avg Change %", fmt_number(avg_change, decimals=2, suffix="%"), prefix="") # Formatted with suffix
+                
+                last_update = latest_fx["date"].max() if "date" in latest_fx.columns else pd.NaT 
+                last_update_display = last_update.strftime(config.DATE_FMT) if pd.notna(last_update) else "N/A"
+                render_main_kpi_card(col3, "Last Update", last_update_display, prefix="")
             
             elif fx_view == "Rate Trends":
                 st.subheader("📈 Exchange Rate Trends")
