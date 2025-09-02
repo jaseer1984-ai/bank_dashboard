@@ -18,6 +18,7 @@
 # - CHANGE: Export LC Detailed View removes 'None'/NaT, adds table-only Maturity Date filters, and formats Maturity Date as DD-MM-YYYY.
 # - UPDATE: Removed auto refresh.
 # - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
+# - UPDATE: Export LC Detailed View table now displays 'Maturity Date' instead of 'Submitted Date'.
 
 import io
 import time
@@ -180,7 +181,7 @@ st.markdown(f"""
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(7) {{ background:#e2e8f0; }}
   /* Reports (now 8th) */
   [data-testid="stTabs"] button[role="tab"]:nth-child(8) {{ background:#f3e8ff; color:#0f172a; }}
-  [data-testid="stTabs"] button[role="tab"][aria-selected="true"]:nth-child(8) {{ background:#e9d5ff; }}
+  [data-testid="stTabs"] button[aria-selected="true"]:nth-child(8) {{ background:#e9d5ff; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1553,6 +1554,8 @@ def main():
                     if not filtered_df.empty and 'status' in filtered_df.columns and 'maturing_current_month' in filtered_df.columns:
                         mask = filtered_df['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
                         accepted_mtd_value = filtered_df.loc[mask, 'maturing_current_month'].sum()
+                        if pd.isna(accepted_mtd_value): # Handle cases where sum results in NaN (e.g., all values are NaN)
+                            accepted_mtd_value = 0.0
                     elif not filtered_df.empty and 'status' in filtered_df.columns and 'maturity_date' in filtered_df.columns and 'value_sar' in filtered_df.columns:
                         # Fallback to original calculation if 'maturing_current_month' is not present
                         now = pd.Timestamp.now()
@@ -1569,6 +1572,8 @@ def main():
                         mask = (filtered_df['status'] == 'ACCEPTED') & \
                                (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
                         accepted_mtd_value = filtered_df.loc[mask, 'value_sar'].sum()
+                        if pd.isna(accepted_mtd_value): # Handle cases where sum results in NaN
+                            accepted_mtd_value = 0.0
 
 
                     m1, m2 = st.columns(2)
@@ -1644,16 +1649,16 @@ def main():
                         in_range = maturity_norm.between(start_ts, end_ts)
                         table_base = table_base[maturity_norm.isna() | in_range].copy()
 
-                    # Detailed table (includes L/C No and Advising Bank)
+                    # Detailed table columns (UPDATED: removed Submitted Date, added Maturity Date)
                     display_cols = {
                         'branch': 'Branch',
                         'applicant': 'Applicant',
                         'lc_no': 'L/C No',
                         'advising_bank': 'Advising Bank',
-                        'submitted_date': 'Submitted Date',
-                        'maturity_date': 'Maturity Date',
+                        # 'submitted_date': 'Submitted Date', # Removed as per request
+                        'maturity_date': 'Maturity Date', # Explicitly included
                         'value_sar': 'Value (SAR)',
-                        'maturing_current_month': 'Maturing Current Month', # Include new column in table
+                        'maturing_current_month': 'Maturing Current Month', 
                         'status': 'Status',
                         'remarks': 'Remarks'
                     }
@@ -1661,14 +1666,10 @@ def main():
                     if cols_to_show:
                         table_view = table_base[cols_to_show].rename(columns={k: display_cols[k] for k in cols_to_show}).copy()
 
-                        # Submitted Date stays YYYY-MM-DD
-                        if 'Submitted Date' in table_view.columns:
-                            table_view['Submitted Date'] = pd.to_datetime(table_view['Submitted Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-
                         # Maturity Date → DD-MM-YYYY (only in this detailed table view)
                         if 'Maturity Date' in table_view.columns:
                             table_view['Maturity Date'] = pd.to_datetime(table_view['Maturity Date'], errors='coerce').dt.strftime('%d-%m-%Y')
-
+                        
                         # Remove 'None'/'NaT'/'nan' text in object columns only
                         obj_cols = table_view.select_dtypes(include='object').columns
                         if len(obj_cols) > 0:
