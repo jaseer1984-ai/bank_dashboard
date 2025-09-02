@@ -16,6 +16,8 @@
 #           Status moved to tabs, and added Issuing Bank filter. Parsing of L/C No made robust.
 # - CHANGE: Export LC tab top-level date filters now use Maturity Date (not Submitted Date).
 # - CHANGE: Export LC Detailed View removes 'None'/NaT, adds table-only Maturity Date filters, and formats Maturity Date as DD-MM-YYYY.
+# - UPDATE: Removed auto refresh.
+# - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
 
 import io
 import time
@@ -703,7 +705,8 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             'maturity date': 'maturity_date',
             'status': 'status',
             'remarks': 'remarks',
-            'branch': 'branch'
+            'branch': 'branch',
+            'maturing current month': 'maturing_current_month' # New column added
         }
         if lc_no_col:
             rename_map[lc_no_col] = 'lc_no'
@@ -717,6 +720,10 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
         if 'value_sar' in d.columns:
             d['value_sar'] = d['value_sar'].apply(_to_number)
+        # Convert new maturing_current_month column to numeric
+        if 'maturing_current_month' in d.columns:
+            d['maturing_current_month'] = d['maturing_current_month'].apply(_to_number)
+
 
         # Clean/standardize
         if 'branch' in d.columns:
@@ -894,6 +901,7 @@ def main():
     # KPI: Accepted Export LC Sum
     accepted_export_lc_sum = 0.0
     if not df_export_lc.empty and 'status' in df_export_lc.columns:
+        # Sum 'value_sar' for all 'ACCEPTED' LCs
         mask = df_export_lc['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
         accepted_export_lc_sum = float(df_export_lc.loc[mask, 'value_sar'].sum())
 
@@ -1539,13 +1547,17 @@ def main():
                     
                     # Total Value metric
                     total_value = filtered_df['value_sar'].sum() if 'value_sar' in filtered_df.columns else 0.0
-                    # Accepted LCs current month maturity sum
+                    
+                    # Accepted LCs current month maturity sum (UPDATED to use 'maturing_current_month' column)
                     accepted_mtd_value = 0.0
-                    if not filtered_df.empty and {'status','maturity_date','value_sar'}.issubset(filtered_df.columns):
+                    if not filtered_df.empty and 'status' in filtered_df.columns and 'maturing_current_month' in filtered_df.columns:
+                        mask = filtered_df['status'].astype(str).str.strip().str.upper() == 'ACCEPTED'
+                        accepted_mtd_value = filtered_df.loc[mask, 'maturing_current_month'].sum()
+                    elif not filtered_df.empty and 'status' in filtered_df.columns and 'maturity_date' in filtered_df.columns and 'value_sar' in filtered_df.columns:
+                        # Fallback to original calculation if 'maturing_current_month' is not present
                         now = pd.Timestamp.now()
                         start_month = now.replace(day=1)
                         end_month = (start_month + pd.offsets.MonthEnd(1))
-                        # Normalize series to day for robust comparison
                         maturity_series = pd.to_datetime(filtered_df['maturity_date'], errors='coerce')
                         try:
                             maturity_series = maturity_series.dt.tz_localize(None)
@@ -1557,6 +1569,7 @@ def main():
                         mask = (filtered_df['status'] == 'ACCEPTED') & \
                                (maturity_series.dt.normalize().between(start_month.normalize(), end_month.normalize()))
                         accepted_mtd_value = filtered_df.loc[mask, 'value_sar'].sum()
+
 
                     m1, m2 = st.columns(2)
                     m1.metric("Total Value (SAR)", fmt_number_only(total_value))
@@ -1640,6 +1653,7 @@ def main():
                         'submitted_date': 'Submitted Date',
                         'maturity_date': 'Maturity Date',
                         'value_sar': 'Value (SAR)',
+                        'maturing_current_month': 'Maturing Current Month', # Include new column in table
                         'status': 'Status',
                         'remarks': 'Remarks'
                     }
@@ -1663,9 +1677,11 @@ def main():
                                 .replace({'None': '', 'none': '', 'NaT': '', 'nan': ''})
                                 .fillna('')
                             )
+                        
+                        num_cols = [c for c in ['Value (SAR)', 'Maturing Current Month'] if c in table_view.columns]
 
                         st.dataframe(
-                            style_right(table_view, num_cols=['Value (SAR)']), 
+                            style_right(table_view, num_cols=num_cols), 
                             use_container_width=True, 
                             height=500
                         )
@@ -1911,12 +1927,8 @@ def main():
     st.markdown("<hr style='margin: 8px 0 16px 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; opacity:0.8; font-size:12px;'>Powered By <strong>Jaseer Pykkarathodi</strong></div>", unsafe_allow_html=True)
 
-    if st.session_state.get("auto_refresh"):
-        interval = int(st.session_state.get("auto_interval", 120))
-        with st.status(f"Auto refreshing in {interval}s…", expanded=False):
-            time.sleep(interval)
-        st.rerun()
+    # Removed the auto refresh block as requested.
 
 if __name__ == "__main__":
+    set_app_font() # Ensure font is set at the start
     main()
-
