@@ -1379,34 +1379,59 @@ def main():
                     if status_label == "Pending":
                         with cc3: st.metric("Urgent (≤2 days)", len(view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=2)]))
                         
-                        # Add urgency indicators for pending settlements
-                        viz = view_data.copy()
-                        viz["Settlement Date"] = viz["settlement_date"].dt.strftime(config.DATE_FMT)
-                        viz["Days Until Due"] = (viz["settlement_date"] - today0).dt.days
-                        rename = {"reference": "Reference", "bank": "Bank", "type": "Type", "status": "Status", "remark": "Remark", "description": "Description", "amount": "Amount"}
-                        viz = viz.rename(columns={k: v for k, v in rename.items() if k in viz.columns})
-                        cols = ["Reference", "Bank", "Type", "Status", "Settlement Date", "Amount", "Days Until Due", "Remark", "Description"]
-                        cols = [c for c in cols if c in viz.columns]
-                        show = viz[cols].sort_values("Settlement Date")
-                        
-                        def _highlight(row):
-                            if "Days Until Due" in row:
-                                if row["Days Until Due"] <= 2: return ['background-color: #fee2e2'] * len(row) # Red
-                                if row["Days Until Due"] <= 7: return ['background-color: #fef3c7'] * len(row) # Yellow
-                            return [''] * len(row)
-                        styled = style_right(show, num_cols=["Amount"]).apply(_highlight, axis=1)
-                        st.dataframe(styled, use_container_width=True, height=400)
-                        
                         # Urgency warnings for pending
                         urgent_settlements = view_data[view_data["settlement_date"] <= today0 + pd.Timedelta(days=3)]
                         if not urgent_settlements.empty:
                             st.warning(f"⚠️ {len(urgent_settlements)} settlement(s) due within 3 days!")
-                            # Display only top few urgent ones to avoid overwhelming UI
-                            for _, settlement in urgent_settlements.head(5).iterrows():
-                                days_left = (settlement["settlement_date"] - today0).days
-                                st.write(f"• {settlement['bank']} - {fmt_number_only(settlement['amount'])} - {days_left} day(s) left")
-                            if len(urgent_settlements) > 5:
-                                st.write(f"... and {len(urgent_settlements) - 5} more.")
+                            
+                            # Prepare data for display
+                            # Define desired columns and potentially rename them for display
+                            display_cols_urgent_map = {
+                                'bank': 'Bank',
+                                'amount': 'Amount',
+                                'settlement_date': 'Date',
+                                'reference': 'Ref',
+                                'type': 'Type',
+                                'remark': 'Remark',
+                                'days_until_due': 'Days Left'
+                            }
+                            
+                            # Filter for columns that actually exist in the DataFrame and are desired
+                            relevant_cols = ['bank', 'amount', 'settlement_date', 'reference', 'type', 'remark']
+                            display_cols_urgent_existing = [col for col in relevant_cols if col in urgent_settlements.columns]
+
+                            # Add 'days_until_due' column if it's needed for display and not present
+                            if 'days_until_due' not in urgent_settlements.columns:
+                                urgent_settlements['days_until_due'] = (urgent_settlements["settlement_date"] - today0).dt.days
+                            
+                            # Ensure 'days_until_due' is included in display columns if it exists
+                            if 'days_until_due' in urgent_settlements.columns and 'days_until_due' not in display_cols_urgent_existing:
+                                display_cols_urgent_existing.append('days_until_due')
+
+                            # Select and rename columns for a cleaner display
+                            display_data_urgent = urgent_settlements[display_cols_urgent_existing].copy()
+                            display_data_urgent = display_data_urgent.rename(columns={
+                                k: v for k, v in display_cols_urgent_map.items() if k in display_data_urgent.columns
+                            })
+                            
+                            # Format Date and Amount
+                            if 'Date' in display_data_urgent.columns:
+                                display_data_urgent['Date'] = pd.to_datetime(display_data_urgent['Date']).dt.strftime(config.DATE_FMT)
+                            if 'Amount' in display_data_urgent.columns:
+                                display_data_urgent['Amount'] = display_data_urgent['Amount'].apply(fmt_number_only)
+
+                            # Limit the number of displayed settlements
+                            max_display = 10 # Display up to 10 settlements
+                            num_settlements = len(display_data_urgent)
+                            
+                            if num_settlements > 0:
+                                display_part = display_data_urgent.head(max_display)
+                                
+                                # Use st.dataframe for better structured display
+                                st.dataframe(display_part, use_container_width=True, height=None) 
+                                
+                                if num_settlements > max_display:
+                                    st.write(f"... and {num_settlements - max_display} more.")
                     
                     else:  # Paid settlements
                         viz_paid = view_data.copy()
@@ -1447,12 +1472,27 @@ def main():
             else:
                 st.info("No settlements match the selected criteria.")
         
-        # Create sub-tabs for Pending and Paid settlements
-        tab_pending, tab_paid = st.tabs(["Pending", "Paid"])
-        with tab_pending:
-            render_settlements_tab(df_lc, "Pending", "pending")
-        with tab_paid:
-            render_settlements_tab(df_lc_paid, "Paid", "paid")
+        # Create tabs for Settlements: ALL, Pending, Paid
+        all_settlement_statuses = ['ALL']
+        if not df_lc.empty:
+            all_settlement_statuses.append("Pending")
+        if not df_lc_paid.empty:
+            all_settlement_statuses.append("Paid")
+        all_settlement_statuses = sorted(list(set(all_settlement_statuses))) # Ensure unique and sorted
+
+        settlement_status_tabs = st.tabs(all_settlement_statuses)
+
+        for i, status_key in enumerate(all_settlement_statuses):
+            with settlement_status_tabs[i]:
+                if status_key == "ALL":
+                    # Combine pending and paid for 'ALL' view
+                    combined_df = pd.concat([df_lc, df_lc_paid], ignore_index=True)
+                    render_settlements_tab(combined_df, "All Settlements", "all_settlements")
+                elif status_key == "Pending":
+                    render_settlements_tab(df_lc, "Pending", "pending")
+                elif status_key == "Paid":
+                    render_settlements_tab(df_lc_paid, "Paid", "paid")
+
 
     # ---- Supplier Payments tab ----
     with tab_payments:
@@ -1496,9 +1536,26 @@ def main():
                     display_as_progress_bars(bank_totals, "bank", "balance")
             else:
                 st.info("No payments match the selected criteria.")
-        tab_approved, tab_released = st.tabs(["Approved", "Released"])
-        with tab_approved: render_payments_tab(df_pay_approved, "Approved", "approved")
-        with tab_released: render_payments_tab(df_pay_released, "Released", "released")
+        
+        # Create tabs for Supplier Payments: ALL, Approved, Released
+        all_payment_statuses = ['ALL']
+        if not df_pay_approved.empty:
+            all_payment_statuses.append("Approved")
+        if not df_pay_released.empty:
+            all_payment_statuses.append("Released")
+        all_payment_statuses = sorted(list(set(all_payment_statuses))) # Ensure unique and sorted
+
+        payment_status_tabs = st.tabs(all_payment_statuses)
+
+        for i, status_key in enumerate(all_payment_statuses):
+            with payment_status_tabs[i]:
+                if status_key == "ALL":
+                    combined_payments_df = pd.concat([df_pay_approved, df_pay_released], ignore_index=True)
+                    render_payments_tab(combined_payments_df, "All Payments", "all_payments")
+                elif status_key == "Approved":
+                    render_payments_tab(df_pay_approved, "Approved", "approved")
+                elif status_key == "Released":
+                    render_payments_tab(df_pay_released, "Released", "released")
 
     # ---- Export LC tab ----
     with tab_export_lc:
