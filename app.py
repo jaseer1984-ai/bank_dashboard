@@ -737,13 +737,6 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
         if 'value_sar' in d.columns:
             d['value_sar'] = d['value_sar'].apply(_to_number)
-        if 'collected' in d.columns:
-            d['collected'] = d['collected'].apply(_to_number)
-
-        if 'maturing_current_month' in d.columns:
-            d['maturing_current_month'] = d['maturing_current_month'].apply(_to_number)
-
-        
         # Convert new maturing_current_month column to numeric
         if 'maturing_current_month' in d.columns:
             d['maturing_current_month'] = d['maturing_current_month'].apply(_to_number)
@@ -1687,17 +1680,9 @@ def main():
                                 if pd.isna(accepted_mtd_value):
                                     accepted_mtd_value = 0.0
         
-                                if status_key == "ALL":
-                                    total_collected = float(filtered_df["collected"].fillna(0).sum()) if "collected" in filtered_df.columns else 0.0
-                                    m1, m2, m3 = st.columns(3)
-                                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                                    m3.metric("Total Collected", fmt_number_only(total_collected))
-                                else:
-                                    m1, m2 = st.columns(2)
-                                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-
+                        m1, m2 = st.columns(2)
+                        m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                        m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
         
                         # ============================
                         # Summary by Branch (table)
@@ -2058,6 +2043,4 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
-
-
 
