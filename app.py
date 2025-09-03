@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+# app.py — Enhanced Treasury Dashboard (Themed, Tabs, Colored Tabs, FX Restored, Paid Settlements, Reports Tab, Export LC Tab)
+# - "Remaining in Month" shows Balance Due from Settlements sheet
+# - Comma-separated numeric formatting (with decimals where needed)
+# - Plotly toolbars hidden
+# - Colored tabs via CSS (no Streamlit tab code changes needed)
+# - Exchange Rates functionality restored
+# - Added "Paid" value in LCR & STL Settlements overview
+# - Added "Reports" tab for complete Excel export
+# - Added "Export LC" tab with data from a new Excel source, including branch and date filters.
+# - Sidebar cleaned up (Controls/Theme hidden) and new "Accepted Export LC" KPI added.
+# - "Export LC" tab moved after "Supplier Payments" and a "Status" filter added.
+# - Fixed bug where rows with no "SUBMITTED DATE" were excluded.
+# - Fixed bug where tab focus jumped on filter change by adding stable keys.
+# - UPDATE: Export LC tab now shows L/C No in table, uses Advising Bank instead of Issuing Bank in table,
+#           Status moved to tabs, and added Issuing Bank filter. Parsing of L/C No made robust.
+# - CHANGE: Export LC tab top-level date filters now use Maturity Date (not Submitted Date).
+# - CHANGE: Export LC Detailed View removes 'None'/NaT, adds table-only Maturity Date filters, and formats Maturity Date as DD-MM-YYYY.
+# - UPDATE: Removed auto refresh.
+# - UPDATE: "Accepted Due this Month (SAR)" metric in Export LC tab now sums "MATURING CURRENT MONTH" column for 'ACCEPTED' status.
+# - UPDATE: Export LC Detailed View table now displays 'Maturity Date' (formatted DD-MM-YYYY) and excludes 'Submitted Date'.
+# - FIX: Ensured 'Maturity Date' column is explicitly included and correctly formatted in Export LC Detailed View,
+#        and added robust parsing for 'MATURITY DATE (DT FORMAT)' column name from the Excel sheet.
+
 import io
 import time
 import logging
@@ -1660,30 +1684,16 @@ def main():
                                         pass
                                 mask = (
                                     filtered_df["status"].astype(str).str.strip().str.upper()
-                                    
                                     == "ACCEPTED"
                                 ) & (mser.dt.normalize().between(start_month.normalize(), end_month.normalize()))
                                 accepted_mtd_value = float(filtered_df.loc[mask, "value_sar"].sum())
-                                if pd.isna(accepted_mtd_value): accepted_mtd_value = 0.0
-                                if str(status_key).strip().upper() == "ALL":
-                                    collected_sum = 0.0
-                                    if not filtered_df.empty and {"status", "value_sar"}.issubset(filtered_df.columns):
-                                        mask_col = filtered_df["status"].astype(str).str.strip().str.upper() == "COLLECTED"
-                                        collected_sum = float(filtered_df.loc[mask_col, "value_sar"].sum())
-                                        if pd.isna(collected_sum):
-                                            collected_sum = 0.0
-                                
-                                    remaining_value = float(total_value - collected_sum)
-                                
-                                    m1, m2, m3, m4 = st.columns(4)
-                                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                                    m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
-                                    m4.metric("Remaining (SAR)", fmt_number_only(remaining_value))
-                                else:
-                                    m1, m2 = st.columns(2)
-                                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                                if pd.isna(accepted_mtd_value):
+                                    accepted_mtd_value = 0.0
+        
+                        m1, m2 = st.columns(2)
+                        m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                        m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+        
                         # ============================
                         # Summary by Branch (table)
                         # ============================
@@ -2043,12 +2053,4 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
-
-
-
-
-
-
-
-
 
