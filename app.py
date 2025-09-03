@@ -1680,9 +1680,17 @@ def main():
                                 if pd.isna(accepted_mtd_value):
                                     accepted_mtd_value = 0.0
         
-                        m1, m2 = st.columns(2)
-                        m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                        m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                                if status_key == "ALL":
+                                    total_collected = float(filtered_df["collected"].fillna(0).sum()) if "collected" in filtered_df.columns else 0.0
+                                    m1, m2, m3 = st.columns(3)
+                                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                                    m3.metric("Total Collected", fmt_number_only(total_collected))
+                                else:
+                                    m1, m2 = st.columns(2)
+                                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+
         
                         # ============================
                         # Summary by Branch (table)
@@ -2043,4 +2051,5 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
