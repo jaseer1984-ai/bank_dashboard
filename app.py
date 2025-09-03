@@ -1691,7 +1691,7 @@ def main():
                                     accepted_mtd_value = 0.0
                         
                         # --- KPIs Rendering ---
-                        if idx == 0:
+                      if idx == 0:
                             # Collected + Remaining
                             collected_sum = 0.0
                             if not filtered_df.empty and {"status", "value_sar"}.issubset(filtered_df.columns):
@@ -1702,16 +1702,16 @@ def main():
                         
                             remaining_value = float(total_value - collected_sum)
                         
-                            m1, m2, m3, m4 = st.columns(4)
-                            m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                            m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                            m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
-                            m4.metric("Remaining (SAR)", fmt_number_only(remaining_value))
-                        else:
-                            m1, m2 = st.columns(2)
-                            m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                            m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                                                                   
+                            c1, c2, c3, c4 = st.columns(4)
+                            c1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                            c2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                            c3.metric("Collected (SAR)", fmt_number_only(collected_sum))
+                            c4.metric("Remaining (SAR)", fmt_number_only(remaining_value))
+                      else:
+                            c1, c2 = st.columns(2)
+                            c1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                            c2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                                                                       
                         # ============================
                         # Summary by Branch (table)
                         # ============================
@@ -2071,6 +2071,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
