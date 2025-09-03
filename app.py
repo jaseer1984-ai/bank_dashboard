@@ -1691,14 +1691,14 @@ def main():
                                     accepted_mtd_value = 0.0
                         
                         # --- KPIs Rendering ---
-                      if idx == 0:
-                            # Collected + Remaining
-                            collected_sum = 0.0
-                            if not filtered_df.empty and {"status", "value_sar"}.issubset(filtered_df.columns):
-                                mask_col = filtered_df["status"].astype(str).str.strip().str.upper() == "COLLECTED"
-                                collected_sum = float(filtered_df.loc[mask_col, "value_sar"].sum())
-                                if pd.isna(collected_sum):
+                                if idx == 0:
+                                    # Collected + Remaining
                                     collected_sum = 0.0
+                                    if not filtered_df.empty and {"status", "value_sar"}.issubset(filtered_df.columns):
+                                        mask_col = filtered_df["status"].astype(str).str.strip().str.upper() == "COLLECTED"
+                                        collected_sum = float(filtered_df.loc[mask_col, "value_sar"].sum())
+                                        if pd.isna(collected_sum):
+                                            collected_sum = 0.0
                         
                             remaining_value = float(total_value - collected_sum)
                         
@@ -2071,6 +2071,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
