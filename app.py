@@ -1659,7 +1659,7 @@ def main():
                         float(filtered_df["value_sar"].sum())
                             if (not filtered_df.empty and "value_sar" in filtered_df.columns)
                             else 0.0
-                        )
+                            )
         
                         # Accepted Due this Month (prefer 'maturing_current_month' column)
                         accepted_mtd_value = 0.0
@@ -2058,6 +2058,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
