@@ -209,8 +209,7 @@ LINKS = {
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
     "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
-    "EXPORT_LC": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRPcr4Mo_ELNbhRer8xuonW9sF1rvBb3kG2W4hKSUI3d_ZRV5Rou_Y-G1HmcW7StQ/pub?output=xlsx",
-    "EXPORT_LC": "https://docs.google.com/spreadsheets/d/e/2PACX-1vSfkIoyzXyzw5Q-xcc1lrdVJL41croZix9S8Q0lsXJEDjiCSTTFn980edt8jFXH6g/pub?output=xlsx,
+    "EXPORT_LC": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRm_ZP8i-fDDLUC4i9SsnmamkvDRGAEtGMvD5fE3D5MNjetpIx0-bt5hqGL2neIEw/pub?output=xlsx",
 }
 
 # ----------------------------
@@ -2044,5 +2043,3 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
-
-
