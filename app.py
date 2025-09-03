@@ -912,8 +912,7 @@ def main():
         ignore_index=True
     )
 
-df_export_lc = parse_export_lc(df_export_lc_raw)
-
+    df_export_lc = parse_export_lc(df_export_lc_raw)
 
     # KPIs
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
@@ -2054,4 +2053,5 @@ df_export_lc = parse_export_lc(df_export_lc_raw)
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
