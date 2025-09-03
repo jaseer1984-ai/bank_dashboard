@@ -737,6 +737,13 @@ def parse_export_lc(df: pd.DataFrame) -> pd.DataFrame:
             d['maturity_date'] = pd.to_datetime(d['maturity_date'], errors='coerce')
         if 'value_sar' in d.columns:
             d['value_sar'] = d['value_sar'].apply(_to_number)
+        if 'collected' in d.columns:
+            d['collected'] = d['collected'].apply(_to_number)
+
+        if 'maturing_current_month' in d.columns:
+            d['maturing_current_month'] = d['maturing_current_month'].apply(_to_number)
+
+        
         # Convert new maturing_current_month column to numeric
         if 'maturing_current_month' in d.columns:
             d['maturing_current_month'] = d['maturing_current_month'].apply(_to_number)
@@ -2051,5 +2058,6 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
