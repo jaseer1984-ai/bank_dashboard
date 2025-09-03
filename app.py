@@ -1652,8 +1652,11 @@ def main():
                         # KPIs
                         # =========
                         st.markdown("---")
-                        total_value = (
-                            float(filtered_df["value_sar"].sum())
+                        total_value = float(filtered_df["value_sar"].sum()) if ("value_sar" in filtered_df.columns and not filtered_df.empty) else 0.0
+                        accepted_mtd_value = 0.0
+                        if not filtered_df.empty:
+                            if {"status", "maturing_current_month"}.issubset(filtered_df.columns):
+                        float(filtered_df["value_sar"].sum())
                             if (not filtered_df.empty and "value_sar" in filtered_df.columns)
                             else 0.0
                         )
@@ -1662,48 +1665,40 @@ def main():
                         accepted_mtd_value = 0.0
                         if not filtered_df.empty:
                             if {"status", "maturing_current_month"}.issubset(filtered_df.columns):
-                                mask = (
-                                    filtered_df["status"].astype(str).str.strip().str.upper() == "ACCEPTED"
-                                )
-                                accepted_mtd_value = float(
-                                    filtered_df.loc[mask, "maturing_current_month"].sum()
-                                )
-                                if pd.isna(accepted_mtd_value):
-                                    accepted_mtd_value = 0.0
+                                mask_acc = filtered_df["status"].astype(str).str.strip().str.upper() == "ACCEPTED"
+                                accepted_mtd_value = float(filtered_df.loc[mask_acc, "maturing_current_month"].sum())
+                                if pd.isna(accepted_mtd_value): accepted_mtd_value = 0.0
                             elif {"status", "maturity_date", "value_sar"}.issubset(filtered_df.columns):
                                 now = pd.Timestamp.now()
-                                start_month = now.replace(day=1)
-                                end_month = start_month + pd.offsets.MonthEnd(1)
+                                start_month = now.replace(day=1).normalize()
+                                end_month = (start_month + pd.offsets.MonthEnd(1)).normalize()
                                 mser = pd.to_datetime(filtered_df["maturity_date"], errors="coerce")
                                 try:
                                     mser = mser.dt.tz_localize(None)
                                 except Exception:
-                                    try:
-                                        mser = mser.dt.tz_convert(None)
-                                    except Exception:
-                                        pass
-                                mask = (
-                                    filtered_df["status"].astype(str).str.strip().str.upper()
-                                    == "ACCEPTED"
-                                ) & (mser.dt.normalize().between(start_month.normalize(), end_month.normalize()))
-                                accepted_mtd_value = float(filtered_df.loc[mask, "value_sar"].sum())
-                                if pd.isna(accepted_mtd_value):
-                                    accepted_mtd_value = 0.0
-                                    collected_sum = 0.0
-                                if not filtered_df.empty and {"status", "value_sar"}.issubset(filtered_df.columns):
-                                    mask_col = filtered_df["status"].astype(str).str.strip().str.upper() == "COLLECTED"
-                                    collected_sum = float(filtered_df.loc[mask_col, "value_sar"].sum())
-                                    if pd.isna(collected_sum):
-                                        collected_sum = 0.0
-                                        remaining_value = float(total_value - collected_sum)
-                                
-                                # 4 KPIs
-                                m1, m2, m3, m4 = st.columns(4)
-                                m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                                m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
-                                m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
-                                m4.metric("Remaining (SAR)", fmt_number_only(remaining_value))
-        
+                                    try: mser = mser.dt.tz_convert(None)
+                                    except Exception: pass
+                                mask_acc = (
+                                    filtered_df["status"].astype(str).str.strip().str.upper().eq("ACCEPTED")
+                                    & mser.dt.normalize().between(start_month, end_month)
+                                )
+                                accepted_mtd_value = float(filtered_df.loc[mask_acc, "value_sar"].sum())
+                                if pd.isna(accepted_mtd_value): accepted_mtd_value = 0.0
+
+                        # Collected & Remaining
+                        if not filtered_df.empty and {"status", "value_sar"}.issubset(filtered_df.columns):
+                            mask_col = filtered_df["status"].astype(str).str.strip().str.upper() == "COLLECTED"  # change text if your status differs
+                            collected_sum = float(filtered_df.loc[mask_col, "value_sar"].sum())
+                            if pd.isna(collected_sum): collected_sum = 0.0
+                        remaining_value = float(total_value - collected_sum)
+                       
+                        # Show 4 KPIs
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Total Value (SAR)", fmt_number_only(total_value))
+                        m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                        m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
+                        m4.metric("Remaining (SAR)", fmt_number_only(remaining_value))
+                        
                         # ============================
                         # Summary by Branch (table)
                         # ============================
@@ -2063,6 +2058,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
