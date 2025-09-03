@@ -1707,7 +1707,7 @@ def main():
                                             c2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
                                             c3.metric("Collected (SAR)", fmt_number_only(collected_sum))
                                             c4.metric("Remaining (SAR)", fmt_number_only(remaining_value))
-                                          else:
+                                    else:
                                             c1, c2 = st.columns(2)
                                             c1.metric("Total Value (SAR)", fmt_number_only(total_value))
                                             c2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
@@ -2071,6 +2071,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
