@@ -1639,7 +1639,7 @@ def main():
                 tab_labels = ["ALL"] + statuses if statuses else ["ALL"]
                 status_tabs = st.tabs(tab_labels)
         
-                for status_key, tab in zip(tab_labels, status_tabs):
+                for idx, (status_key, tab) in enumerate(zip(tab_labels, status_tabs)):
                     with tab:
                         if status_key == "ALL":
                             filtered_df = filtered_df_base.copy()
@@ -1691,7 +1691,7 @@ def main():
                                     accepted_mtd_value = 0.0
                         
                         # --- KPIs Rendering ---
-                        if str(status_key).strip().upper() == "ALL":
+                        if idx == 0:
                             # Collected + Remaining
                             collected_sum = 0.0
                             if not filtered_df.empty and {"status", "value_sar"}.issubset(filtered_df.columns):
@@ -2071,6 +2071,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
