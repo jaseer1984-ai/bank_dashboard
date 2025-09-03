@@ -209,7 +209,9 @@ LINKS = {
     "Fund Movement": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=66055663",
     "COLLECTION_BRANCH": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=457517415",
     "EXCHANGE_RATE": f"https://docs.google.com/spreadsheets/d/{config.FILE_ID}/export?format=csv&gid=58540369",
-    "EXPORT_LC": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRm_ZP8i-fDDLUC4i9SsnmamkvDRGAEtGMvD5fE3D5MNjetpIx0-bt5hqGL2neIEw/pub?output=xlsx",
+    "EXPORT_LC_1": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRPcr4Mo_ELNbhRer8xuonW9sF1rvBb3kG2W4hKSUI3d_ZRV5Rou_Y-G1HmcW7StQ/pub?output=xlsx",
+    "EXPORT_LC_2": "https://docs.google.com/spreadsheets/d/e/2PACX-1vSfkIoyzXyzw5Q-xcc1lrdVJL41croZix9S8Q0lsXJEDjiCSTTFn980edt8jFXH6g/pub?output=xlsx",
+    "EXPORT_LC_3": "https://docs.google.com/spreadsheets/d/e/2PACX-1vSrbVcu8T64yTgx9ofcAVvBXvRtHBKoQF7a088Gp0GMQAWyB_fGv9QjRdSUcdbCug/pub?output=xlsx",
 }
 
 # ----------------------------
@@ -900,9 +902,18 @@ def main():
     df_fx_raw = read_csv(LINKS["EXCHANGE_RATE"])
     df_fx = parse_exchange_rates(df_fx_raw)
     
-    # Load Export LC data
-    df_export_lc_raw = read_excel_all_sheets(LINKS["EXPORT_LC"])
-    df_export_lc = parse_export_lc(df_export_lc_raw)
+    # Load Export LC data from 3 files and combine
+    df_export_lc_raw_1 = read_excel_all_sheets(LINKS["EXPORT_LC_1"])
+    df_export_lc_raw_2 = read_excel_all_sheets(LINKS["EXPORT_LC_2"])
+    df_export_lc_raw_3 = read_excel_all_sheets(LINKS["EXPORT_LC_3"])
+    
+    df_export_lc_raw = pd.concat(
+        [df_export_lc_raw_1, df_export_lc_raw_2, df_export_lc_raw_3],
+        ignore_index=True
+    )
+
+df_export_lc = parse_export_lc(df_export_lc_raw)
+
 
     # KPIs
     total_balance = float(df_by_bank["balance"].sum()) if not df_by_bank.empty else 0.0
@@ -2043,3 +2054,4 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
