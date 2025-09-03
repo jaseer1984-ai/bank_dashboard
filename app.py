@@ -1684,6 +1684,7 @@ def main():
                                         pass
                                 mask = (
                                     filtered_df["status"].astype(str).str.strip().str.upper()
+                                    
                                     == "ACCEPTED"
                                 ) & (mser.dt.normalize().between(start_month.normalize(), end_month.normalize()))
                                 accepted_mtd_value = float(filtered_df.loc[mask, "value_sar"].sum())
@@ -1704,9 +1705,7 @@ def main():
                                     m3.metric("Collected (SAR)", fmt_number_only(collected_sum))
                                     m4.metric("Remaining (SAR)", fmt_number_only(remaining_value))
                                 else:
-                                    m1, m2 = st.columns(2)
-                                    m1.metric("Total Value (SAR)", fmt_number_only(total_value))
-                                    m2.metric("Accepted Due this Month (SAR)", fmt_number_only(accepted_mtd_value))
+                                   
                         # ============================
                         # Summary by Branch (table)
                         # ============================
@@ -2066,6 +2065,7 @@ def main():
 if __name__ == "__main__":
     set_app_font() # Ensure font is set at the start
     main()
+
 
 
 
